@@ -1,0 +1,163 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  test-python:
+    name: Python Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio
+
+    - name: Run linting
+      run: |
+        pip install ruff black
+        black --check ai_orchestrator api automation_engine
+        ruff check .
+
+    - name: Run tests
+      run: |
+        pytest tests/unit -v --cov=ai_orchestrator --cov=api --cov-report=xml
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: python
+        name: Python Coverage
+
+  test-dashboard:
+    name: Dashboard Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        cache-dependency-path: dashboard/package-lock.json
+
+    - name: Install dependencies
+      working-directory: ./dashboard
+      run: npm ci
+
+    - name: Run linting
+      working-directory: ./dashboard
+      run: npm run lint
+      continue-on-error: true
+
+    - name: Run tests
+      working-directory: ./dashboard
+      run: npm test -- --coverage --watchAll=false
+      continue-on-error: true
+
+    - name: Build dashboard
+      working-directory: ./dashboard
+      run: npm run build
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy results
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [test-python, test-dashboard]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build API Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.api
+        push: false
+        tags: azure-ai-copilot-api:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build Dashboard Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./dashboard
+        file: ./dashboard/Dockerfile
+        push: false
+        tags: azure-ai-copilot-dashboard:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Azure
+    runs-on: ubuntu-latest
+    needs: [docker-build, security-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Deploy to Azure Container Apps
+      run: |
+        echo "Deployment to Azure would happen here"
+        # az containerapp update commands would go here
+
+    - name: Run smoke tests
+      run: |
+        echo "Running smoke tests against deployed environment"
+        # curl health checks would go here

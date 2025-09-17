@@ -1,0 +1,56 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-copilot-ingress
+  namespace: ai-copilot
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/websocket-services: "ai-copilot-api-service"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - aicopilot.example.com
+    - api.aicopilot.example.com
+    secretName: ai-copilot-tls
+  rules:
+  - host: aicopilot.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ai-copilot-dashboard-service
+            port:
+              number: 80
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: ai-copilot-api-service
+            port:
+              number: 8000
+      - path: /ws
+        pathType: Prefix
+        backend:
+          service:
+            name: ai-copilot-api-service
+            port:
+              number: 8000
+  - host: api.aicopilot.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ai-copilot-api-service
+            port:
+              number: 8000

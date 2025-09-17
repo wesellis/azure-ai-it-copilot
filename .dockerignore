@@ -1,0 +1,76 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+docs/
+DOCUMENTATION/
+
+# Testing
+tests/
+test_*.py
+*_test.py
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+azure-pipelines.yml
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Kubernetes
+k8s/
+
+# Build artifacts
+dist/
+build/
+*.log
+
+# Development
+Makefile
+scripts/
+*.sh
+!entrypoint.sh
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup

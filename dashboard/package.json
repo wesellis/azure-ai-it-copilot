@@ -1,0 +1,73 @@
+{
+  "name": "azure-ai-copilot-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@emotion/react": "^11.11.1",
+    "@emotion/styled": "^11.11.0",
+    "@mui/icons-material": "^5.14.19",
+    "@mui/material": "^5.14.20",
+    "@mui/lab": "^5.0.0-alpha.155",
+    "@mui/x-charts": "^6.18.0",
+    "@mui/x-data-grid": "^6.18.0",
+    "@testing-library/jest-dom": "^5.17.0",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "axios": "^1.6.2",
+    "chart.js": "^4.4.0",
+    "date-fns": "^2.30.0",
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.0",
+    "react-scripts": "5.0.1",
+    "recharts": "^2.10.0",
+    "socket.io-client": "^4.5.4",
+    "web-vitals": "^2.1.4"
+  },
+  "devDependencies": {
+    "prettier": "^2.8.8",
+    "serve": "^14.2.0"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "test:coverage": "react-scripts test --coverage --watchAll=false",
+    "test:ci": "CI=true react-scripts test --coverage --watchAll=false",
+    "eject": "react-scripts eject",
+    "lint": "eslint src --ext .js,.jsx,.ts,.tsx",
+    "lint:fix": "eslint src --ext .js,.jsx,.ts,.tsx --fix",
+    "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,json,css,md}\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,json,css,md}\"",
+    "dev": "REACT_APP_API_URL=http://localhost:8000 npm start",
+    "build:dev": "REACT_APP_API_URL=http://localhost:8000 npm run build",
+    "build:staging": "REACT_APP_API_URL=$STAGING_API_URL npm run build",
+    "build:prod": "REACT_APP_API_URL=$PRODUCTION_API_URL npm run build",
+    "analyze": "npm run build && npx source-map-explorer 'build/static/js/*.js'",
+    "serve": "serve -s build -l 3000",
+    "clean": "rm -rf build node_modules/.cache",
+    "deps:check": "npm outdated",
+    "deps:update": "npm update",
+    "health": "curl -f http://localhost:3000 || exit 1"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "proxy": "http://localhost:8000"
+}

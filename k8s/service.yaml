@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-copilot-api-service
+  namespace: ai-copilot
+  labels:
+    app: ai-copilot-api
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: ai-copilot-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-copilot-dashboard-service
+  namespace: ai-copilot
+  labels:
+    app: ai-copilot-dashboard
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: ai-copilot-dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: ai-copilot
+  labels:
+    app: redis
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+    targetPort: 6379
+    protocol: TCP
+    name: redis
+  selector:
+    app: redis

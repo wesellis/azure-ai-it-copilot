@@ -56,11 +56,11 @@ class AzureAIOrchestrator:
     def setup_azure_clients(self):
         """Initialize Azure SDK clients"""
         credential = DefaultAzureCredential()
-        subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+        self.subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
 
-        self.resource_client = ResourceManagementClient(credential, subscription_id)
-        self.compute_client = ComputeManagementClient(credential, subscription_id)
-        self.network_client = NetworkManagementClient(credential, subscription_id)
+        self.resource_client = ResourceManagementClient(credential, self.subscription_id)
+        self.compute_client = ComputeManagementClient(credential, self.subscription_id)
+        self.network_client = NetworkManagementClient(credential, self.subscription_id)
 
     def setup_ai_model(self):
         """Initialize Azure OpenAI model"""
@@ -83,11 +83,25 @@ class AzureAIOrchestrator:
 
     def setup_redis(self):
         """Initialize Redis connection for caching"""
-        self.redis_client = redis.Redis(
-            host=os.getenv("REDIS_HOST", "localhost"),
-            port=int(os.getenv("REDIS_PORT", 6379)),
-            decode_responses=True
-        )
+        try:
+            self.redis_client = redis.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", 6379)),
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                retry_on_timeout=True,
+                health_check_interval=30
+            )
+            # Test connection
+            self.redis_client.ping()
+            logger.info("Redis connection established successfully")
+        except redis.ConnectionError as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            self.redis_client = None
+        except Exception as e:
+            logger.error(f"Unexpected error setting up Redis: {e}")
+            self.redis_client = None
 
     def load_agents(self) -> Dict[str, Any]:
         """Load specialized agents for different tasks"""
@@ -161,16 +175,22 @@ class AzureAIOrchestrator:
                 {"output": json.dumps(result)}
             )
 
-            # Cache result
-            self.redis_client.setex(
-                f"command:{datetime.now().isoformat()}",
-                3600,
-                json.dumps({
-                    "command": command,
-                    "intent": intent.value,
-                    "result": result
-                })
-            )
+            # Cache result if Redis is available
+            if self.redis_client:
+                try:
+                    self.redis_client.setex(
+                        f"command:{datetime.now().isoformat()}",
+                        3600,
+                        json.dumps({
+                            "command": command,
+                            "intent": intent.value,
+                            "result": result
+                        })
+                    )
+                except redis.ConnectionError:
+                    logger.warning("Failed to cache result: Redis connection lost")
+                except Exception as e:
+                    logger.warning(f"Failed to cache result: {e}")
 
             return result
 
@@ -273,11 +293,18 @@ class AzureAIOrchestrator:
 
     def get_status(self) -> Dict[str, Any]:
         """Get current orchestrator status"""
+        redis_connected = False
+        if self.redis_client:
+            try:
+                redis_connected = self.redis_client.ping()
+            except (redis.ConnectionError, redis.TimeoutError):
+                redis_connected = False
+
         return {
             "status": "healthy",
             "agents_loaded": len(self.agents),
             "memory_size": len(self.memory.buffer),
-            "redis_connected": self.redis_client.ping()
+            "redis_connected": redis_connected
         }
 
 
