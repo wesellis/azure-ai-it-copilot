@@ -28,16 +28,15 @@ class TestAPI:
         assert response.status_code == 200
         assert response.json()["status"] == "healthy"
 
-    @patch('api.server.verify_token')
-    def test_detailed_health_check(self, mock_verify, client, auth_headers):
+    def test_detailed_health_check(self, client):
         """Test detailed health check with authentication"""
-        mock_verify.return_value = {"sub": "testuser", "role": "owner"}
-        
-        response = client.get("/health/detailed", headers=auth_headers)
-        assert response.status_code == 200
-        data = response.json()
-        assert "orchestrator" in data
-        assert "redis" in data
+        with patch('api.server.verify_token', return_value={"sub": "testuser", "role": "owner"}):
+            with patch('api.server.security', return_value=None):
+                response = client.get("/health/detailed", headers={"Authorization": "Bearer test-token"})
+                assert response.status_code == 200
+                data = response.json()
+                assert "orchestrator" in data
+                assert "redis" in data
 
     def test_login_success(self, client):
         """Test successful login"""
