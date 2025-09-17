@@ -1,0 +1,118 @@
+# Environment
+.env
+.env.local
+.env.*.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.npm
+.yarn
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+*.cover
+.hypothesis/
+
+# Build
+dist/
+build/
+*.log
+.cache
+.parcel-cache
+.next/
+out/
+
+# Azure
+local.settings.json
+.azure/
+
+# Docker
+.docker/
+
+# Secrets
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Data
+*.db
+*.sqlite
+*.sqlite3
+data/
+logs/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
+.directory
+
+# Temporary
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# Documentation build
+docs/_build/
+site/
+
+# ML Models
+models/*.pkl
+models/*.h5
+models/*.joblib
+*.ckpt
+
+# Monitoring
+prometheus_data/
+grafana_data/
