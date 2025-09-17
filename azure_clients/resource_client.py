@@ -9,11 +9,11 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import json
 
-from azure.identity.aio import DefaultAzureCredential
-from azure.mgmt.resource.aio import ResourceManagementClient
-from azure.mgmt.compute.aio import ComputeManagementClient
-from azure.mgmt.network.aio import NetworkManagementClient
-from azure.mgmt.storage.aio import StorageManagementClient
+from azure.identity import DefaultAzureCredential
+from azure.mgmt.resource import ResourceManagementClient
+from azure.mgmt.compute import ComputeManagementClient
+from azure.mgmt.network import NetworkManagementClient
+from azure.mgmt.storage import StorageManagementClient
 from azure.core.exceptions import ResourceNotFoundError, HttpResponseError
 
 from config.settings import get_settings
@@ -70,22 +70,9 @@ class AzureResourceClient:
             logger.error(f"Failed to initialize Azure clients: {str(e)}")
             raise
 
-    async def close(self):
+    def close(self):
         """Close Azure clients"""
-        clients = [
-            self.resource_client,
-            self.compute_client,
-            self.network_client,
-            self.storage_client
-        ]
-
-        for client in clients:
-            if client:
-                await client.close()
-
-        if self.credential:
-            await self.credential.close()
-
+        # For sync clients, just mark as uninitialized
         self._initialized = False
         logger.info("Azure clients closed")
 
@@ -96,7 +83,7 @@ class AzureResourceClient:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit"""
-        await self.close()
+        self.close()
 
     async def list_resource_groups(self) -> List[Dict[str, Any]]:
         """List all resource groups"""

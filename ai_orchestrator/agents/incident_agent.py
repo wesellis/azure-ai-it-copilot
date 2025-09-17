@@ -28,11 +28,10 @@ class IncidentAgent:
         """Initialize the incident response agent"""
         self.orchestrator = orchestrator
         self.llm = orchestrator.llm
-        self.credential = DefaultAzureCredential()
 
-        # Initialize Azure Monitor clients
-        self.logs_client = LogsQueryClient(self.credential)
-        self.metrics_client = MetricsQueryClient(self.credential)
+        # Use the orchestrator's Azure Monitor clients
+        self.logs_client = orchestrator.logs_client
+        self.metrics_client = orchestrator.metrics_client
 
         # Knowledge base of known issues and solutions
         self.knowledge_base = self._load_knowledge_base()
@@ -299,47 +298,105 @@ class IncidentAgent:
         Returns:
             Execution result with diagnosis and remediation
         """
+        if not plan:
+            return {
+                'status': 'failed',
+                'message': 'No incident response plan provided'
+            }
+
         result = {
             'status': 'diagnosing',
             'start_time': datetime.now().isoformat(),
             'diagnostics_completed': [],
             'root_cause': None,
             'remediation_applied': [],
-            'resolution_status': 'pending'
+            'resolution_status': 'pending',
+            'incident_id': plan.get('incident_id', f"incident-{datetime.now().strftime('%Y%m%d%H%M%S')}")
         }
 
         try:
-            # Phase 1: Run diagnostics
+            # Phase 1: Run diagnostics with timeout
             logger.info("Starting incident diagnosis")
-            diagnosis = await self._run_diagnostics(plan)
-            result['diagnostics_completed'] = diagnosis['completed']
-            result['root_cause'] = diagnosis['root_cause']
-
-            # Phase 2: Apply remediation
-            logger.info(f"Root cause identified: {diagnosis['root_cause']}")
-
-            if plan.get('auto_remediate', True):
-                remediation = await self._apply_remediation(
-                    plan['remediation_options'],
-                    diagnosis['root_cause']
+            try:
+                diagnosis = await asyncio.wait_for(
+                    self._run_diagnostics(plan),
+                    timeout=120.0  # 2 minutes for diagnostics
                 )
-                result['remediation_applied'] = remediation['actions']
-                result['resolution_status'] = remediation['status']
+                result['diagnostics_completed'] = diagnosis['completed']
+                result['root_cause'] = diagnosis['root_cause']
+                result['findings'] = diagnosis.get('findings', [])
+            except asyncio.TimeoutError:
+                logger.error("Incident diagnosis timed out")
+                result['status'] = 'failed'
+                result['error'] = 'Diagnosis phase timed out'
+                return result
+            except Exception as diag_error:
+                logger.error(f"Diagnosis failed: {str(diag_error)}")
+                result['status'] = 'failed'
+                result['error'] = f'Diagnosis failed: {str(diag_error)}'
+                return result
+
+            # Phase 2: Apply remediation if enabled
+            logger.info(f"Root cause identified: {diagnosis['root_cause']}")
+            result['status'] = 'remediating'
+
+            if plan.get('auto_remediate', True) and plan.get('remediation_options'):
+                try:
+                    remediation = await asyncio.wait_for(
+                        self._apply_remediation(
+                            plan['remediation_options'],
+                            diagnosis['root_cause']
+                        ),
+                        timeout=300.0  # 5 minutes for remediation
+                    )
+                    result['remediation_applied'] = remediation['actions']
+                    result['resolution_status'] = remediation['status']
+                except asyncio.TimeoutError:
+                    logger.error("Remediation timed out")
+                    result['resolution_status'] = 'timeout'
+                    result['remediation_error'] = 'Remediation timed out'
+                except Exception as remediation_error:
+                    logger.error(f"Remediation failed: {str(remediation_error)}")
+                    result['resolution_status'] = 'failed'
+                    result['remediation_error'] = str(remediation_error)
             else:
                 result['resolution_status'] = 'manual_intervention_required'
+                logger.info("Auto-remediation disabled or no remediation options available")
 
-            # Phase 3: Verify resolution
+            # Phase 3: Verify resolution if remediation was successful
             if result['resolution_status'] == 'success':
-                verification = await self._verify_resolution(plan)
-                result['verification'] = verification
+                try:
+                    verification = await asyncio.wait_for(
+                        self._verify_resolution(plan),
+                        timeout=60.0  # 1 minute for verification
+                    )
+                    result['verification'] = verification
+
+                    # Update final status based on verification
+                    if not verification.get('fully_resolved', False):
+                        result['resolution_status'] = 'partially_resolved'
+                        logger.warning("Incident not fully resolved according to verification")
+                except asyncio.TimeoutError:
+                    logger.warning("Resolution verification timed out")
+                    result['verification_error'] = 'Verification timed out'
+                except Exception as verify_error:
+                    logger.warning(f"Verification failed: {str(verify_error)}")
+                    result['verification_error'] = str(verify_error)
 
             result['status'] = 'completed'
             result['end_time'] = datetime.now().isoformat()
 
+            # Calculate total execution time
+            start_time = datetime.fromisoformat(result['start_time'].replace('Z', '+00:00'))
+            end_time = datetime.fromisoformat(result['end_time'].replace('Z', '+00:00'))
+            result['total_execution_time'] = str(end_time - start_time)
+
         except Exception as e:
-            logger.error(f"Incident response failed: {str(e)}")
+            logger.error(f"Incident response failed: {str(e)}", exc_info=True)
             result['status'] = 'failed'
             result['error'] = str(e)
+            result['error_type'] = type(e).__name__
+            result['end_time'] = datetime.now().isoformat()
 
         return result
 

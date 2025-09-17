@@ -11,11 +11,13 @@ from datetime import datetime, timedelta
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, WebSocket, WebSocketDisconnect, status, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-import jwt
+from jose import jwt
+from jose.exceptions import ExpiredSignatureError, JWTError
 from passlib.context import CryptContext
 import redis.asyncio as redis
 from prometheus_client import Counter, Histogram, generate_latest
@@ -165,13 +167,43 @@ app = FastAPI(
 )
 
 # Configure CORS
+cors_origins = os.getenv("CORS_ORIGINS", "*")
+if cors_origins == "*":
+    origins = ["*"]
+else:
+    origins = [origin.strip() for origin in cors_origins.split(",")]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("CORS_ORIGINS", "*")],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add security middleware
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["*"]  # Configure this with your domain in production
+)
+
+# Add security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+
+    # Security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+
+    # Only add HSTS in production with HTTPS
+    if os.getenv("ENVIRONMENT") == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    return response
 
 
 # Authentication helpers
@@ -179,9 +211,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(hours=1)
+        expire = datetime.now() + timedelta(hours=1)
     
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(
@@ -203,12 +235,12 @@ async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(secur
             algorithms=["HS256"]
         )
         return payload
-    except jwt.ExpiredSignatureError:
+    except ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired"
         )
-    except jwt.InvalidTokenError:
+    except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token"
@@ -254,14 +286,28 @@ async def get_metrics():
 @app.post("/auth/login", response_model=AuthResponse)
 async def login(auth_request: AuthRequest):
     """Authenticate and receive access token"""
-    # In production, verify against Azure AD or database
-    # This is a simplified demo implementation
+    # Get credentials from environment variables
+    admin_username = os.getenv("ADMIN_USERNAME", "admin")
+    admin_password_hash = os.getenv("ADMIN_PASSWORD_HASH")
 
-    if auth_request.username == "admin" and auth_request.password == "admin123":
+    # If no hash is set, create one from the plain password (for development only)
+    if not admin_password_hash:
+        default_password = os.getenv("ADMIN_PASSWORD", "change-me-in-production")
+        admin_password_hash = pwd_context.hash(default_password)
+        logger.warning("Using unhashed password from environment. Set ADMIN_PASSWORD_HASH for production!")
+
+    # Verify credentials
+    if (auth_request.username == admin_username and
+        pwd_context.verify(auth_request.password, admin_password_hash)):
+
         access_token = create_access_token(
             data={"sub": auth_request.username, "role": "owner"}
         )
         return AuthResponse(access_token=access_token)
+
+    # Add a small delay to prevent timing attacks
+    import time
+    time.sleep(0.1)
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -386,20 +432,37 @@ async def query_resources(
     current_user: dict = Depends(verify_token)
 ):
     """Query Azure resources"""
-    command = f"List all {query.resource_type or 'resources'}"
-    if query.resource_group:
-        command += f" in resource group {query.resource_group}"
-    if query.tags:
-        command += f" with tags {json.dumps(query.tags)}"
-    
-    context = {
-        "user_id": current_user["sub"],
-        "user_role": current_user.get("role", "reader"),
-        "include_metrics": query.include_metrics
-    }
-    
-    result = await orchestrator.process_command(command, context)
-    return result
+    try:
+        command = f"List all {query.resource_type or 'resources'}"
+        if query.resource_group:
+            command += f" in resource group {query.resource_group}"
+        if query.tags:
+            command += f" with tags {json.dumps(query.tags)}"
+
+        context = {
+            "user_id": current_user["sub"],
+            "user_role": current_user.get("role", "reader"),
+            "include_metrics": query.include_metrics
+        }
+
+        result = await orchestrator.process_command(command, context)
+
+        if result.get("status") == "error":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("message", "Resource query failed")
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resource query failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Resource query failed: {str(e)}"
+        )
 
 
 @app.post("/api/v1/resources/create")
@@ -409,22 +472,47 @@ async def create_resource(
     current_user: dict = Depends(verify_token)
 ):
     """Create a new Azure resource"""
-    if current_user.get("role") not in ["contributor", "owner"]:
+    try:
+        if current_user.get("role") not in ["contributor", "owner"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions to create resources"
+            )
+
+        # Validate resource type
+        valid_types = ["vm", "storage", "network", "database", "webapp"]
+        if resource_type not in valid_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid resource type. Must be one of: {', '.join(valid_types)}"
+            )
+
+        command = f"Create a {resource_type} with specifications: {json.dumps(specifications)}"
+
+        context = {
+            "user_id": current_user["sub"],
+            "user_role": current_user.get("role"),
+            "auto_approve": False
+        }
+
+        result = await orchestrator.process_command(command, context)
+
+        if result.get("status") == "error":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("message", "Resource creation failed")
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resource creation failed: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions to create resources"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Resource creation failed: {str(e)}"
         )
-    
-    command = f"Create a {resource_type} with specifications: {json.dumps(specifications)}"
-    
-    context = {
-        "user_id": current_user["sub"],
-        "user_role": current_user.get("role"),
-        "auto_approve": False
-    }
-    
-    result = await orchestrator.process_command(command, context)
-    return result
 
 
 @app.delete("/api/v1/resources/{resource_id}")
@@ -434,24 +522,48 @@ async def delete_resource(
     current_user: dict = Depends(verify_token)
 ):
     """Delete an Azure resource"""
-    if current_user.get("role") != "owner":
+    try:
+        if current_user.get("role") != "owner":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only owners can delete resources"
+            )
+
+        # Validate resource ID format
+        if not resource_id or len(resource_id) < 10:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid resource ID format"
+            )
+
+        command = f"Delete resource with ID {resource_id}"
+        if force:
+            command += " forcefully"
+
+        context = {
+            "user_id": current_user["sub"],
+            "user_role": current_user.get("role"),
+            "force": force
+        }
+
+        result = await orchestrator.process_command(command, context)
+
+        if result.get("status") == "error":
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=result.get("message", "Resource deletion failed")
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Resource deletion failed: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only owners can delete resources"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Resource deletion failed: {str(e)}"
         )
-    
-    command = f"Delete resource with ID {resource_id}"
-    if force:
-        command += " forcefully"
-    
-    context = {
-        "user_id": current_user["sub"],
-        "user_role": current_user.get("role"),
-        "force": force
-    }
-    
-    result = await orchestrator.process_command(command, context)
-    return result
 
 
 @app.get("/api/v1/resources/{resource_id}")

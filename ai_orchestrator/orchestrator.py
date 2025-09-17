@@ -21,6 +21,8 @@ from azure.identity import DefaultAzureCredential
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.compute import ComputeManagementClient
 from azure.mgmt.network import NetworkManagementClient
+from azure.mgmt.storage import StorageManagementClient
+from azure.monitor.query import LogsQueryClient
 
 import redis
 import logging
@@ -61,6 +63,11 @@ class AzureAIOrchestrator:
         self.resource_client = ResourceManagementClient(credential, self.subscription_id)
         self.compute_client = ComputeManagementClient(credential, self.subscription_id)
         self.network_client = NetworkManagementClient(credential, self.subscription_id)
+        self.storage_client = StorageManagementClient(credential, self.subscription_id)
+
+        # Azure Monitor clients for incident response
+        self.logs_client = LogsQueryClient(credential)
+        self.metrics_client = MetricsQueryClient(credential)
 
     def setup_ai_model(self):
         """Initialize Azure OpenAI model"""
@@ -105,11 +112,11 @@ class AzureAIOrchestrator:
 
     def load_agents(self) -> Dict[str, Any]:
         """Load specialized agents for different tasks"""
-        from agents.infrastructure_agent import InfrastructureAgent
-        from agents.incident_agent import IncidentAgent
-        from agents.cost_agent import CostOptimizationAgent
-        from agents.compliance_agent import ComplianceAgent
-        from agents.predictive_agent import PredictiveAgent
+        from ai_orchestrator.agents.infrastructure_agent import InfrastructureAgent
+        from ai_orchestrator.agents.incident_agent import IncidentAgent
+        from ai_orchestrator.agents.cost_agent import CostOptimizationAgent
+        from ai_orchestrator.agents.compliance_agent import ComplianceAgent
+        from ai_orchestrator.agents.predictive_agent import PredictiveAgent
 
         return {
             IntentType.RESOURCE_CREATE: InfrastructureAgent(self),
@@ -136,56 +143,123 @@ class AzureAIOrchestrator:
         Returns:
             Execution result with status and details
         """
+        if not command or not command.strip():
+            return {
+                "status": "error",
+                "message": "Command cannot be empty"
+            }
+
         try:
             # Log command
             logger.info(f"Processing command: {command}")
 
-            # Parse intent
-            intent = await self.classify_intent(command)
-            logger.info(f"Classified intent: {intent}")
+            # Parse intent with timeout
+            try:
+                intent = await asyncio.wait_for(
+                    self.classify_intent(command),
+                    timeout=30.0
+                )
+                logger.info(f"Classified intent: {intent}")
+            except asyncio.TimeoutError:
+                logger.error("Intent classification timed out")
+                return {
+                    "status": "error",
+                    "message": "Command processing timed out"
+                }
 
             # Validate permissions
             if not await self.validate_permissions(intent, context):
                 return {
                     "status": "error",
-                    "message": "Insufficient permissions for this operation"
+                    "message": "Insufficient permissions for this operation",
+                    "required_role": self._get_required_role(intent)
                 }
 
             # Select appropriate agent
-            agent = self.agents.get(intent, self.agents[IntentType.UNKNOWN])
+            agent = self.agents.get(intent)
+            if not agent:
+                logger.error(f"No agent found for intent: {intent}")
+                return {
+                    "status": "error",
+                    "message": f"No handler available for operation type: {intent.value}"
+                }
 
-            # Generate execution plan
-            plan = await agent.create_plan(command, context)
+            # Generate execution plan with timeout
+            try:
+                plan = await asyncio.wait_for(
+                    agent.create_plan(command, context),
+                    timeout=60.0
+                )
+            except asyncio.TimeoutError:
+                logger.error("Plan generation timed out")
+                return {
+                    "status": "error",
+                    "message": "Plan generation timed out"
+                }
+            except Exception as e:
+                logger.error(f"Plan generation failed: {str(e)}")
+                return {
+                    "status": "error",
+                    "message": f"Failed to create execution plan: {str(e)}"
+                }
 
             # Request approval if needed
             if plan.get("requires_approval", False):
-                approval = await self.request_approval(plan)
-                if not approval:
+                try:
+                    approval = await self.request_approval(plan)
+                    if not approval:
+                        return {
+                            "status": "cancelled",
+                            "message": "Operation cancelled - approval denied"
+                        }
+                except Exception as e:
+                    logger.error(f"Approval process failed: {str(e)}")
                     return {
-                        "status": "cancelled",
-                        "message": "Operation cancelled by user"
+                        "status": "error",
+                        "message": "Approval process failed"
                     }
 
-            # Execute plan
-            result = await agent.execute(plan)
+            # Execute plan with timeout
+            try:
+                result = await asyncio.wait_for(
+                    agent.execute(plan),
+                    timeout=300.0  # 5 minutes
+                )
+            except asyncio.TimeoutError:
+                logger.error("Plan execution timed out")
+                return {
+                    "status": "error",
+                    "message": "Operation timed out"
+                }
+            except Exception as e:
+                logger.error(f"Plan execution failed: {str(e)}")
+                return {
+                    "status": "error",
+                    "message": f"Execution failed: {str(e)}"
+                }
 
-            # Store in memory
-            self.memory.save_context(
-                {"input": command},
-                {"output": json.dumps(result)}
-            )
+            # Store in memory safely
+            try:
+                self.memory.save_context(
+                    {"input": command},
+                    {"output": json.dumps(result, default=str)}
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save to memory: {e}")
 
             # Cache result if Redis is available
             if self.redis_client:
                 try:
+                    cache_data = {
+                        "command": command,
+                        "intent": intent.value,
+                        "result": result,
+                        "timestamp": datetime.now().isoformat()
+                    }
                     self.redis_client.setex(
                         f"command:{datetime.now().isoformat()}",
                         3600,
-                        json.dumps({
-                            "command": command,
-                            "intent": intent.value,
-                            "result": result
-                        })
+                        json.dumps(cache_data, default=str)
                     )
                 except redis.ConnectionError:
                     logger.warning("Failed to cache result: Redis connection lost")
@@ -195,10 +269,11 @@ class AzureAIOrchestrator:
             return result
 
         except Exception as e:
-            logger.error(f"Error processing command: {str(e)}")
+            logger.error(f"Unexpected error processing command: {str(e)}", exc_info=True)
             return {
                 "status": "error",
-                "message": f"Failed to process command: {str(e)}"
+                "message": "An unexpected error occurred while processing your command",
+                "error_type": type(e).__name__
             }
 
     async def classify_intent(self, command: str) -> IntentType:
@@ -271,6 +346,20 @@ class AzureAIOrchestrator:
 
         allowed = permissions.get(user_role, [])
         return intent in allowed
+
+    def _get_required_role(self, intent: IntentType) -> str:
+        """Get the minimum required role for an intent"""
+        role_requirements = {
+            IntentType.RESOURCE_CREATE: "contributor",
+            IntentType.RESOURCE_DELETE: "owner",
+            IntentType.RESOURCE_MODIFY: "contributor",
+            IntentType.RESOURCE_QUERY: "reader",
+            IntentType.INCIDENT_DIAGNOSIS: "contributor",
+            IntentType.COST_OPTIMIZATION: "contributor",
+            IntentType.COMPLIANCE_CHECK: "contributor",
+            IntentType.PREDICTIVE_ANALYSIS: "reader"
+        }
+        return role_requirements.get(intent, "contributor")
 
     async def request_approval(self, plan: Dict[str, Any]) -> bool:
         """
