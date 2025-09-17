@@ -31,6 +31,12 @@ class LogLevel(str, Enum):
 class Settings(BaseSettings):
     """Main application settings"""
 
+    model_config = {
+        'env_file': '.env',
+        'env_file_encoding': 'utf-8',
+        'extra': 'ignore'  # Ignore extra fields in .env
+    }
+
     # Environment
     environment: Environment = Field(default=Environment.DEVELOPMENT, env="ENVIRONMENT")
     debug: bool = Field(default=False, env="DEBUG")
@@ -46,26 +52,32 @@ class Settings(BaseSettings):
     log_format: str = Field(default="%(asctime)s - %(name)s - %(levelname)s - %(message)s", env="LOG_FORMAT")
 
     # CORS
-    cors_origins: List[str] = Field(default=["*"], env="CORS_ORIGINS")
+    cors_origins: str = Field(default="*", env="CORS_ORIGINS")
     cors_allow_credentials: bool = Field(default=True, env="CORS_ALLOW_CREDENTIALS")
 
+    def get_cors_origins_list(self) -> List[str]:
+        """Get CORS origins as list"""
+        if self.cors_origins == "*":
+            return ["*"]
+        return [origin.strip() for origin in self.cors_origins.split(',') if origin.strip()]
+
     # Azure Configuration
-    azure_subscription_id: str = Field(..., env="AZURE_SUBSCRIPTION_ID")
-    azure_tenant_id: str = Field(..., env="AZURE_TENANT_ID")
-    azure_client_id: str = Field(..., env="AZURE_CLIENT_ID")
-    azure_client_secret: str = Field(..., env="AZURE_CLIENT_SECRET")
+    azure_subscription_id: str = Field(default="development-subscription", env="AZURE_SUBSCRIPTION_ID")
+    azure_tenant_id: str = Field(default="development-tenant", env="AZURE_TENANT_ID")
+    azure_client_id: str = Field(default="development-client", env="AZURE_CLIENT_ID")
+    azure_client_secret: str = Field(default="development-secret", env="AZURE_CLIENT_SECRET")
     azure_resource_group: str = Field(default="rg-ai-copilot", env="AZURE_RESOURCE_GROUP")
     azure_location: str = Field(default="eastus", env="AZURE_LOCATION")
 
     # Azure OpenAI
-    azure_openai_endpoint: str = Field(..., env="AZURE_OPENAI_ENDPOINT")
-    azure_openai_key: str = Field(..., env="AZURE_OPENAI_KEY")
+    azure_openai_endpoint: str = Field(default="https://development.openai.azure.com", env="AZURE_OPENAI_ENDPOINT")
+    azure_openai_key: str = Field(default="development-openai-key", env="AZURE_OPENAI_KEY")
     azure_openai_model: str = Field(default="gpt-4", env="AZURE_OPENAI_MODEL")
     azure_openai_temperature: float = Field(default=0.1, env="AZURE_OPENAI_TEMPERATURE")
 
     # Database
-    cosmos_db_endpoint: str = Field(..., env="COSMOS_DB_ENDPOINT")
-    cosmos_db_key: str = Field(..., env="COSMOS_DB_KEY")
+    cosmos_db_endpoint: str = Field(default="https://development.documents.azure.com", env="COSMOS_DB_ENDPOINT")
+    cosmos_db_key: str = Field(default="development-cosmos-key", env="COSMOS_DB_KEY")
     cosmos_db_name: str = Field(default="aiitcopilot", env="COSMOS_DB_NAME")
 
     # Redis
@@ -76,13 +88,41 @@ class Settings(BaseSettings):
     redis_ssl: bool = Field(default=False, env="REDIS_SSL")
 
     # Security
-    jwt_secret_key: str = Field(..., env="JWT_SECRET_KEY")
+    jwt_secret_key: str = Field(default="development-jwt-secret-change-in-production", env="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", env="JWT_ALGORITHM")
     jwt_expiration_hours: int = Field(default=24, env="JWT_EXPIRATION_HOURS")
+
+    # Authentication
+    admin_username: str = Field(default="admin", env="ADMIN_USERNAME")
+    admin_password: Optional[str] = Field(default=None, env="ADMIN_PASSWORD")
+    admin_password_hash: Optional[str] = Field(default=None, env="ADMIN_PASSWORD_HASH")
+
+    # Feature Flags
+    enable_auto_remediation: bool = Field(default=True, env="ENABLE_AUTO_REMEDIATION")
+    enable_predictive_analytics: bool = Field(default=True, env="ENABLE_PREDICTIVE_ANALYTICS")
+    enable_cost_optimization: bool = Field(default=True, env="ENABLE_COST_OPTIMIZATION")
+    enable_compliance_checks: bool = Field(default=True, env="ENABLE_COMPLIANCE_CHECKS")
+
+    # Rate Limiting
+    rate_limit_requests: int = Field(default=100, env="RATE_LIMIT_REQUESTS")
+    rate_limit_period: int = Field(default=60, env="RATE_LIMIT_PERIOD")
 
     # Monitoring
     application_insights_key: Optional[str] = Field(default=None, env="APPLICATION_INSIGHTS_KEY")
     prometheus_enabled: bool = Field(default=True, env="PROMETHEUS_ENABLED")
+    prometheus_port: int = Field(default=9090, env="PROMETHEUS_PORT")
+    grafana_port: int = Field(default=3001, env="GRAFANA_PORT")
+    grafana_user: str = Field(default="admin", env="GRAFANA_USER")
+    grafana_password: str = Field(default="admin", env="GRAFANA_PASSWORD")
+
+    # Deployment Configuration
+    resource_group: str = Field(default="rg-ai-copilot", env="RESOURCE_GROUP")
+    location: str = Field(default="eastus", env="LOCATION")
+    acr_name: str = Field(default="aicopilotacr", env="ACR_NAME")
+    aks_cluster_name: str = Field(default="aks-ai-copilot", env="AKS_CLUSTER_NAME")
+    redis_name: str = Field(default="redis-ai-copilot", env="REDIS_NAME")
+    app_insights_name: str = Field(default="ai-copilot-insights", env="APP_INSIGHTS_NAME")
+    log_analytics_workspace: str = Field(default="ai-copilot-logs", env="LOG_ANALYTICS_WORKSPACE")
 
     # External Integrations
     teams_webhook_url: Optional[str] = Field(default=None, env="TEAMS_WEBHOOK_URL")
@@ -110,11 +150,11 @@ class Settings(BaseSettings):
     enable_cost_optimization: bool = Field(default=True, env="ENABLE_COST_OPTIMIZATION")
     enable_predictive_analytics: bool = Field(default=True, env="ENABLE_PREDICTIVE_ANALYTICS")
 
-    @validator('cors_origins', pre=True)
-    def parse_cors_origins(cls, v):
-        """Parse CORS origins from comma-separated string"""
+    @validator('cors_origins')
+    def validate_cors_origins(cls, v):
+        """Validate CORS origins string format"""
         if isinstance(v, str):
-            return [origin.strip() for origin in v.split(',')]
+            return v
         return v
 
     @validator('environment')
@@ -166,7 +206,7 @@ class Settings(BaseSettings):
     def get_cors_config(self) -> Dict[str, Any]:
         """Get CORS configuration"""
         return {
-            "allow_origins": self.cors_origins,
+            "allow_origins": self.get_cors_origins_list(),
             "allow_credentials": self.cors_allow_credentials,
             "allow_methods": ["*"],
             "allow_headers": ["*"],
@@ -191,10 +231,6 @@ class Settings(BaseSettings):
             "temperature": self.azure_openai_temperature,
         }
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
 
 
 @lru_cache()

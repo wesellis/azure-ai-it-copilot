@@ -341,7 +341,7 @@ class SystemLog(Base):
     user_agent = Column(String(500), nullable=True)
 
     # Additional data
-    metadata = Column(JSON, nullable=True)
+    log_metadata = Column(JSON, nullable=True)
     request_id = Column(String(255), nullable=True)
     correlation_id = Column(String(255), nullable=True)
 

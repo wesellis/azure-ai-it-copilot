@@ -131,11 +131,7 @@ def create_app() -> FastAPI:
     )
 
     # Add CORS middleware
-    cors_origins = os.getenv("CORS_ORIGINS", "*")
-    if cors_origins == "*":
-        origins = ["*"]
-    else:
-        origins = [origin.strip() for origin in cors_origins.split(",")]
+    origins = app_manager.settings.get_cors_origins_list()
 
     app.add_middleware(
         CORSMiddleware,
