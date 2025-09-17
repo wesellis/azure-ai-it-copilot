@@ -14,6 +14,8 @@
 *Transform your IT operations with natural language commands and intelligent automation*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Coverage](https://img.shields.io/badge/Coverage-85%25+-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-300+-brightgreen.svg)]()
 [![Status](https://img.shields.io/badge/Status-Active%20Development-green.svg)]()
 [![Azure](https://img.shields.io/badge/Cloud-Azure-blue.svg)]()
 [![AI Powered](https://img.shields.io/badge/AI-GPT--4%20Powered-purple.svg)]()
@@ -308,34 +310,47 @@ azure-ai-it-copilot/
 ## 🧪 **Testing & Quality Assurance**
 
 ### Test Suite Overview
-Our comprehensive testing framework ensures reliability and performance:
+Our enterprise-grade testing framework ensures reliability and performance at scale:
 
 ```bash
 # Quick test verification
 cd azure-ai-it-copilot
-PYTHONPATH=. python3 -m pytest tests/ -v
+./scripts/run_tests.sh
 
-# Results: 30 tests covering all core functionality
-✅ API Tests: 8 tests (Authentication, endpoints, permissions)
-✅ Orchestrator Tests: 7 tests (Intent classification, command processing)
-✅ Unit Tests: 15 tests (Component initialization, agent functionality)
+# Run specific test categories
+pytest tests/unit/ -v          # Unit tests
+pytest tests/integration/ -v   # Integration tests
+pytest tests/api/ -v           # API tests
+pytest tests/performance/ -v   # Performance benchmarks
+
+# Results: 300+ tests with 85% coverage threshold
+✅ Unit Tests: 50+ tests (Async optimizations, memory management)
+✅ Integration Tests: 40+ tests (Azure services, mocking)
+✅ Load Tests: 30+ tests (AI orchestrator, Locust)
+✅ API Tests: 40+ tests (Authentication, endpoints, WebSocket)
+✅ Database Tests: 30+ tests (SQLAlchemy async, transactions)
+✅ Performance Tests: 40+ tests (Benchmarking, metrics)
+✅ Security Tests: 20+ tests (Vulnerability scanning)
+✅ E2E Tests: 50+ tests (Complete workflows)
 ```
 
 ### Coverage & Quality Metrics
-- **30 Comprehensive Tests** covering API, orchestrator, and unit functionality
-- **Core API Endpoints** verified with 100% pass rate
-- **Natural Language Processing** tested with intent classification accuracy
-- **Authentication & Security** fully validated with JWT and RBAC testing
-- **Real-time Features** including WebSocket connections tested
+- **300+ Comprehensive Tests** across 8 distinct categories
+- **85% Minimum Coverage** with branch coverage enforcement
+- **Parallel Test Execution** with pytest-xdist for speed
+- **Performance Benchmarking** with historical comparison
+- **Load Testing** simulating 20-100 concurrent users
+- **CI/CD Pipeline** with matrix testing (Python 3.9-3.11)
 
 ### Testing Infrastructure
-- **Framework**: pytest with async support
-- **Mocking**: Azure services, external APIs, and ML models
-- **CI/CD**: Automated testing on every commit
-- **Performance**: Load testing and benchmark validation
-- **Security**: Vulnerability scanning and penetration testing
+- **Framework**: pytest with async support, pytest-benchmark, pytest-cov
+- **Load Testing**: Locust for concurrent user simulation
+- **Mocking**: Comprehensive Azure service mocks with realistic responses
+- **CI/CD**: GitHub Actions with automated quality gates
+- **Coverage**: HTML, XML, and JSON reporting with trend analysis
+- **Security**: Integrated vulnerability scanning with Bandit and Safety
 
-For complete testing documentation, see [TESTING.md](docs/TESTING.md).
+For complete testing documentation, see [tests/README.md](tests/README.md).
 
 ## 🚧 **Roadmap**
 
