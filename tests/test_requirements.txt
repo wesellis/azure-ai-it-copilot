@@ -22,7 +22,7 @@ responses==0.25.3
 
 # Load testing
 locust==2.32.4        # Load testing framework
-aiohttp==3.10.11      # Async HTTP for load tests
+aiohttp==3.12.14      # Async HTTP for load tests
 
 # Database testing
 pytest-postgresql==6.1.0
