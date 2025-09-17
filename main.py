@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Azure AI IT Copilot - Main Application Entry Point
-Production-ready application launcher with proper initialization
+Production-ready modular application launcher with dependency injection
 """
 
 import asyncio
@@ -21,6 +21,10 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from config.settings import get_settings
 from logging_config import setup_logging
 
+# Import modular application
+from core.application import get_application, initialize_application, shutdown_application
+from core.dependency_injection import get_container
+
 # Import database
 from database.connection import init_database, db_manager
 
@@ -34,17 +38,22 @@ logger = logging.getLogger(__name__)
 
 
 class ApplicationManager:
-    """Manages application lifecycle and components"""
+    """Enhanced application lifecycle manager with modular architecture"""
 
     def __init__(self):
         self.settings = get_settings()
         self.shutdown_event = asyncio.Event()
+        self.application = get_application()
         self._components_started = False
 
     async def startup(self):
-        """Initialize all application components"""
+        """Initialize all application components with modular architecture"""
         try:
-            logger.info("🚀 Starting Azure AI IT Copilot...")
+            logger.info("🚀 Starting Azure AI IT Copilot with modular architecture...")
+
+            # Initialize modular application
+            logger.info("🔧 Initializing modular application...")
+            await initialize_application()
 
             # Initialize database
             logger.info("📊 Initializing database...")
@@ -57,23 +66,30 @@ class ApplicationManager:
             else:
                 logger.warning("⚠️ Azure AD authentication disabled - using basic auth")
 
-            # Initialize background tasks (if needed)
+            # Initialize background tasks with DI container
             await self._start_background_tasks()
 
             self._components_started = True
-            logger.info("✅ Application startup completed successfully")
+            logger.info("✅ Modular application startup completed successfully")
+
+            # Log plugin information
+            plugin_info = self.application.get_plugin_info()
+            logger.info(f"📦 Loaded {plugin_info['total_plugins']} plugins")
 
         except Exception as e:
             logger.error(f"❌ Application startup failed: {str(e)}")
             raise
 
     async def shutdown(self):
-        """Cleanup application components"""
+        """Cleanup application components with modular shutdown"""
         try:
             logger.info("🛑 Shutting down Azure AI IT Copilot...")
 
             # Stop background tasks
             await self._stop_background_tasks()
+
+            # Shutdown modular application
+            await shutdown_application()
 
             # Close database connections
             db_manager.close()
@@ -81,20 +97,44 @@ class ApplicationManager:
             # Set shutdown event
             self.shutdown_event.set()
 
-            logger.info("✅ Application shutdown completed")
+            logger.info("✅ Modular application shutdown completed")
 
         except Exception as e:
             logger.error(f"❌ Error during shutdown: {str(e)}")
 
     async def _start_background_tasks(self):
-        """Start background tasks like data cleanup, monitoring, etc."""
-        # This would start any background tasks
-        # For now, we'll just log that background tasks are ready
-        logger.info("🔄 Background tasks initialized")
+        """Start background tasks using dependency injection"""
+        try:
+            container = get_container()
+
+            # Initialize task queue service if available
+            from core.interfaces import ITaskQueue
+            if container.is_registered(ITaskQueue):
+                task_queue = container.resolve(ITaskQueue)
+                await task_queue.initialize()
+                logger.info("🔄 Task queue service initialized")
+
+            # Initialize other background services
+            logger.info("🔄 Background tasks initialized with DI")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Background tasks initialization warning: {e}")
 
     async def _stop_background_tasks(self):
         """Stop background tasks gracefully"""
-        logger.info("🔄 Stopping background tasks...")
+        try:
+            container = get_container()
+
+            # Shutdown task queue service if available
+            from core.interfaces import ITaskQueue
+            if container.is_registered(ITaskQueue):
+                task_queue = container.resolve(ITaskQueue)
+                await task_queue.shutdown()
+
+            logger.info("🔄 Background tasks stopped")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Background tasks shutdown warning: {e}")
 
 
 # Global application manager

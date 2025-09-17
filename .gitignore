@@ -50,11 +50,17 @@ lerna-debug.log*
 # Testing
 coverage/
 .coverage
+coverage.xml
+coverage.json
 htmlcov/
 .pytest_cache/
 .tox/
 *.cover
 .hypothesis/
+test-results.xml
+test-report.html
+benchmark-results/
+test-reports/
 
 # Build
 dist/
@@ -87,7 +93,6 @@ credentials/
 *.sqlite3
 data/
 logs/
-*.log
 
 # OS
 Thumbs.db
@@ -115,9 +120,4 @@ models/*.joblib
 
 # Monitoring
 prometheus_data/
-grafana_data/.venv/
-venv/
-__pycache__/
-*.pyc
-node_modules/
-.DS_Store
+grafana_data/

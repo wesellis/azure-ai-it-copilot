@@ -1,14 +1,16 @@
 """
-Application settings and configuration management
-Uses pydantic for validation and type safety
+Optimized Application settings and configuration management
+Uses pydantic for validation, type safety, and performance optimization
 """
 
 import os
-from typing import Optional, Dict, Any, List
-from functools import lru_cache
-from pydantic import Field, validator
+from typing import Optional, Dict, Any, List, Union
+from functools import lru_cache, cached_property
+from pydantic import Field, validator, root_validator
 from pydantic_settings import BaseSettings
 from enum import Enum
+from pathlib import Path
+import warnings
 
 
 class Environment(str, Enum):
@@ -29,23 +31,55 @@ class LogLevel(str, Enum):
 
 
 class Settings(BaseSettings):
-    """Main application settings"""
+    """Optimized main application settings with validation and caching"""
 
     model_config = {
-        'env_file': '.env',
+        'env_file': ['.env.local', '.env'],  # Support multiple env files
         'env_file_encoding': 'utf-8',
-        'extra': 'ignore'  # Ignore extra fields in .env
+        'extra': 'ignore',  # Ignore extra fields in .env
+        'case_sensitive': False,  # Allow case-insensitive env vars
+        'validate_assignment': True,  # Validate on assignment
+        'use_enum_values': True  # Use enum values instead of names
     }
 
-    # Environment
-    environment: Environment = Field(default=Environment.DEVELOPMENT, env="ENVIRONMENT")
-    debug: bool = Field(default=False, env="DEBUG")
+    # Environment Configuration
+    environment: Environment = Field(
+        default=Environment.DEVELOPMENT,
+        env="ENVIRONMENT",
+        description="Application environment"
+    )
+    debug: bool = Field(
+        default=False,
+        env="DEBUG",
+        description="Enable debug mode"
+    )
 
-    # Application
-    app_name: str = Field(default="Azure AI IT Copilot", env="APP_NAME")
-    app_version: str = Field(default="1.0.0", env="APP_VERSION")
-    api_host: str = Field(default="0.0.0.0", env="API_HOST")
-    api_port: int = Field(default=8000, env="API_PORT")
+    # Application Configuration
+    app_name: str = Field(
+        default="Azure AI IT Copilot",
+        env="APP_NAME",
+        min_length=1,
+        max_length=100,
+        description="Application name"
+    )
+    app_version: str = Field(
+        default="1.0.0",
+        env="APP_VERSION",
+        pattern=r'^\d+\.\d+\.\d+$',
+        description="Application version (semver)"
+    )
+    api_host: str = Field(
+        default="0.0.0.0",
+        env="API_HOST",
+        description="API server host"
+    )
+    api_port: int = Field(
+        default=8000,
+        env="API_PORT",
+        ge=1,
+        le=65535,
+        description="API server port"
+    )
 
     # Logging
     log_level: LogLevel = Field(default=LogLevel.INFO, env="LOG_LEVEL")
@@ -55,11 +89,14 @@ class Settings(BaseSettings):
     cors_origins: str = Field(default="*", env="CORS_ORIGINS")
     cors_allow_credentials: bool = Field(default=True, env="CORS_ALLOW_CREDENTIALS")
 
+    @cached_property
     def get_cors_origins_list(self) -> List[str]:
-        """Get CORS origins as list"""
+        """Get CORS origins as optimized list with caching"""
         if self.cors_origins == "*":
             return ["*"]
-        return [origin.strip() for origin in self.cors_origins.split(',') if origin.strip()]
+        # Filter out empty origins and normalize
+        origins = [origin.strip() for origin in self.cors_origins.split(',') if origin.strip()]
+        return origins if origins else ["*"]  # Fallback to allow all if no valid origins
 
     # Azure Configuration
     azure_subscription_id: str = Field(default="development-subscription", env="AZURE_SUBSCRIPTION_ID")
@@ -152,68 +189,102 @@ class Settings(BaseSettings):
 
     @validator('cors_origins')
     def validate_cors_origins(cls, v):
-        """Validate CORS origins string format"""
+        """Validate and normalize CORS origins"""
         if isinstance(v, str):
+            # Clean up origins - remove empty strings and whitespace
+            if v.strip() == "*":
+                return "*"
+            origins = [origin.strip() for origin in v.split(',') if origin.strip()]
+            return ','.join(origins)
+        return v
+
+    @validator('api_host')
+    def validate_api_host(cls, v):
+        """Validate API host format"""
+        if v in ['localhost', '127.0.0.1', '0.0.0.0']:
             return v
-        return v
-
-    @validator('environment')
-    def validate_environment(cls, v):
-        """Validate environment value"""
-        if v not in Environment:
-            raise ValueError(f"Invalid environment: {v}")
-        return v
-
-    @validator('api_port')
-    def validate_port(cls, v):
-        """Validate API port"""
-        if not 1 <= v <= 65535:
-            raise ValueError("Port must be between 1 and 65535")
+        # Basic validation for IP or hostname
+        if not v.replace('.', '').replace('-', '').replace('_', '').isalnum():
+            raise ValueError(f"Invalid API host format: {v}")
         return v
 
     @validator('azure_openai_temperature')
     def validate_temperature(cls, v):
-        """Validate OpenAI temperature"""
+        """Validate OpenAI temperature range"""
         if not 0.0 <= v <= 2.0:
             raise ValueError("Temperature must be between 0.0 and 2.0")
-        return v
+        return round(v, 2)  # Round to 2 decimal places
 
     @validator('jwt_expiration_hours')
     def validate_jwt_expiration(cls, v):
-        """Validate JWT expiration"""
-        if v <= 0:
-            raise ValueError("JWT expiration must be positive")
+        """Validate JWT expiration with reasonable limits"""
+        if not 1 <= v <= 168:  # 1 hour to 1 week max
+            raise ValueError("JWT expiration must be between 1 and 168 hours")
         return v
 
+    @root_validator
+    def validate_production_requirements(cls, values):
+        """Validate production-specific requirements"""
+        env = values.get('environment')
+        if env == Environment.PRODUCTION:
+            # Check critical production settings
+            jwt_secret = values.get('jwt_secret_key', '')
+            if jwt_secret == 'development-jwt-secret-change-in-production':
+                warnings.warn(
+                    "Using default JWT secret in production! Please set JWT_SECRET_KEY",
+                    UserWarning
+                )
+
+            azure_tenant = values.get('azure_tenant_id', '')
+            if azure_tenant == 'development-tenant':
+                warnings.warn(
+                    "Using default Azure tenant in production! Please set AZURE_TENANT_ID",
+                    UserWarning
+                )
+
+        return values
+
+    @cached_property
     def is_development(self) -> bool:
-        """Check if running in development mode"""
+        """Check if running in development mode (cached)"""
         return self.environment == Environment.DEVELOPMENT
 
+    @cached_property
     def is_production(self) -> bool:
-        """Check if running in production mode"""
+        """Check if running in production mode (cached)"""
         return self.environment == Environment.PRODUCTION
 
+    @cached_property
     def is_testing(self) -> bool:
-        """Check if running in testing mode"""
+        """Check if running in testing mode (cached)"""
         return self.environment == Environment.TESTING
 
+    @cached_property
+    def is_staging(self) -> bool:
+        """Check if running in staging mode (cached)"""
+        return self.environment == Environment.STAGING
+
+    @cached_property
     def get_redis_url(self) -> str:
-        """Get Redis connection URL"""
+        """Get optimized Redis connection URL with caching"""
         scheme = "rediss" if self.redis_ssl else "redis"
         auth = f":{self.redis_password}@" if self.redis_password else ""
         return f"{scheme}://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
+    @cached_property
     def get_cors_config(self) -> Dict[str, Any]:
-        """Get CORS configuration"""
+        """Get optimized CORS configuration with caching"""
         return {
             "allow_origins": self.get_cors_origins_list(),
             "allow_credentials": self.cors_allow_credentials,
-            "allow_methods": ["*"],
-            "allow_headers": ["*"],
+            "allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Authorization", "Content-Type", "X-Request-ID"],
+            "expose_headers": ["X-Request-ID", "X-Response-Time"]
         }
 
+    @cached_property
     def get_azure_credentials(self) -> Dict[str, str]:
-        """Get Azure credentials as dictionary"""
+        """Get Azure credentials as optimized dictionary with caching"""
         return {
             "subscription_id": self.azure_subscription_id,
             "tenant_id": self.azure_tenant_id,
@@ -221,32 +292,80 @@ class Settings(BaseSettings):
             "client_secret": self.azure_client_secret,
         }
 
+    def is_azure_configured(self) -> bool:
+        """Check if Azure credentials are properly configured"""
+        creds = self.get_azure_credentials
+        return all([
+            creds["subscription_id"] != "development-subscription",
+            creds["tenant_id"] != "development-tenant",
+            creds["client_id"] != "development-client",
+            creds["client_secret"] != "development-secret"
+        ])
+
+    @cached_property
     def get_openai_config(self) -> Dict[str, Any]:
-        """Get OpenAI configuration"""
+        """Get optimized OpenAI configuration with caching"""
         return {
             "azure_endpoint": self.azure_openai_endpoint,
             "api_key": self.azure_openai_key,
             "api_version": "2024-02-01",
             "model": self.azure_openai_model,
             "temperature": self.azure_openai_temperature,
+            "max_tokens": 4000,  # Reasonable default
+            "timeout": 30  # Request timeout
         }
 
+    def is_openai_configured(self) -> bool:
+        """Check if OpenAI configuration is properly set up"""
+        config = self.get_openai_config
+        return all([
+            config["azure_endpoint"] != "https://development.openai.azure.com",
+            config["api_key"] != "development-openai-key",
+            config["model"] != "gpt-4"  # Ensure specific model is configured
+        ])
 
 
-@lru_cache()
+
+# Global settings instance with proper caching
+_settings_instance: Optional[Settings] = None
+
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Get cached settings instance"""
-    return Settings()
+    """Get cached settings instance with optimized loading"""
+    global _settings_instance
+    if _settings_instance is None:
+        _settings_instance = Settings()
+    return _settings_instance
 
+def reload_settings() -> Settings:
+    """Force reload settings (useful for configuration updates)"""
+    global _settings_instance
+    _settings_instance = None
+    get_settings.cache_clear()
+    return get_settings()
 
+@lru_cache(maxsize=1)
 def get_environment_info() -> Dict[str, Any]:
-    """Get environment information for health checks"""
+    """Get cached environment information for health checks"""
     settings = get_settings()
     return {
-        "environment": settings.environment,
+        "environment": settings.environment.value,
         "app_name": settings.app_name,
         "app_version": settings.app_version,
         "debug": settings.debug,
         "api_host": settings.api_host,
         "api_port": settings.api_port,
+        "uptime_start": settings.model_config.get('created_at', 'unknown')
+    }
+
+def get_security_config() -> Dict[str, Any]:
+    """Get security-related configuration summary"""
+    settings = get_settings()
+    return {
+        "jwt_algorithm": settings.jwt_algorithm,
+        "jwt_expiration_hours": settings.jwt_expiration_hours,
+        "cors_configured": len(settings.get_cors_origins_list) > 0,
+        "azure_configured": settings.is_azure_configured(),
+        "openai_configured": settings.is_openai_configured(),
+        "production_ready": settings.is_production and settings.is_azure_configured()
     }

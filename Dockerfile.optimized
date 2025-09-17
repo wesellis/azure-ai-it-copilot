@@ -1,0 +1,73 @@
+# Multi-stage optimized Docker build for production
+FROM python:3.11-slim as base
+
+# Install system dependencies in base stage
+RUN apt-get update && apt-get install -y \
+    --no-install-recommends \
+    gcc \
+    libc6-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Build stage for dependencies
+FROM base as builder
+
+WORKDIR /app
+
+# Copy only requirements first for better layer caching
+COPY requirements.txt .
+
+# Create virtual environment and install dependencies
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install dependencies with optimizations
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Production stage
+FROM base as production
+
+# Create non-root user for security
+RUN groupadd -r copilot && useradd -r -g copilot copilot
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Set working directory
+WORKDIR /app
+
+# Copy application code with proper ownership
+COPY --chown=copilot:copilot . .
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/tmp && \
+    chown -R copilot:copilot /app
+
+# Environment variables for production
+ENV PYTHONPATH=/app:$PYTHONPATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Switch to non-root user
+USER copilot
+
+# Expose port
+EXPOSE 8000
+
+# Health check with timeout optimization
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health || exit 1
+
+# Production-optimized startup
+CMD ["uvicorn", "api.server:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "4", \
+     "--worker-class", "uvicorn.workers.UvicornWorker", \
+     "--access-log", \
+     "--log-level", "info"]

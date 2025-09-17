@@ -1,0 +1,460 @@
+name: Test Suite and Coverage Analysis
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - '**.py'
+      - 'tests/**'
+      - 'requirements*.txt'
+      - 'pyproject.toml'
+      - 'pytest.ini'
+      - '.coveragerc'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - '**.py'
+      - 'tests/**'
+      - 'requirements*.txt'
+      - 'pyproject.toml'
+      - 'pytest.ini'
+      - '.coveragerc'
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      coverage_threshold:
+        description: 'Coverage threshold percentage'
+        required: false
+        default: '85'
+        type: string
+      test_suite:
+        description: 'Test suite to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - unit
+        - integration
+        - performance
+        - api
+        - database
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  COVERAGE_THRESHOLD: ${{ github.event.inputs.coverage_threshold || '85' }}
+
+jobs:
+  test-matrix:
+    name: Test Suite (${{ matrix.test-suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+        test-suite: ["unit", "integration", "api", "database"]
+        include:
+          - python-version: "3.11"
+            test-suite: "performance"
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_azure_copilot
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r tests/test_requirements.txt
+
+    - name: Set up test environment
+      run: |
+        # Create test directories
+        mkdir -p test-reports
+        mkdir -p htmlcov
+        mkdir -p benchmark-results
+
+        # Set environment variables for testing
+        echo "DATABASE_URL=postgresql://test_user:test_password@localhost:5432/test_azure_copilot" >> $GITHUB_ENV
+        echo "REDIS_URL=redis://localhost:6379/0" >> $GITHUB_ENV
+        echo "AZURE_TENANT_ID=test-tenant-id" >> $GITHUB_ENV
+        echo "AZURE_CLIENT_ID=test-client-id" >> $GITHUB_ENV
+        echo "AZURE_CLIENT_SECRET=test-client-secret" >> $GITHUB_ENV
+        echo "TEST_MODE=true" >> $GITHUB_ENV
+
+    - name: Run ${{ matrix.test-suite }} tests
+      run: |
+        case "${{ matrix.test-suite }}" in
+          "unit")
+            pytest tests/unit/ -v --tb=short --junitxml=test-reports/unit-results.xml
+            ;;
+          "integration")
+            pytest tests/integration/ -v --tb=short -m integration --junitxml=test-reports/integration-results.xml
+            ;;
+          "api")
+            pytest tests/api/ -v --tb=short -m api --junitxml=test-reports/api-results.xml
+            ;;
+          "database")
+            pytest tests/database/ -v --tb=short -m database --junitxml=test-reports/database-results.xml
+            ;;
+          "performance")
+            pytest tests/performance/ -v --tb=short -m performance --benchmark-sort=mean --junitxml=test-reports/performance-results.xml
+            ;;
+        esac
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.python-version }}-${{ matrix.test-suite }}
+        path: test-reports/
+        retention-days: 30
+
+  coverage-analysis:
+    name: Coverage Analysis
+    runs-on: ubuntu-latest
+    needs: test-matrix
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: test_azure_copilot
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r tests/test_requirements.txt
+
+    - name: Set up test environment
+      run: |
+        mkdir -p test-reports htmlcov
+        echo "DATABASE_URL=postgresql://test_user:test_password@localhost:5432/test_azure_copilot" >> $GITHUB_ENV
+        echo "REDIS_URL=redis://localhost:6379/0" >> $GITHUB_ENV
+        echo "AZURE_TENANT_ID=test-tenant-id" >> $GITHUB_ENV
+        echo "AZURE_CLIENT_ID=test-client-id" >> $GITHUB_ENV
+        echo "AZURE_CLIENT_SECRET=test-client-secret" >> $GITHUB_ENV
+        echo "TEST_MODE=true" >> $GITHUB_ENV
+
+    - name: Run comprehensive test suite with coverage
+      run: |
+        pytest tests/ \
+          --cov=. \
+          --cov-report=html:htmlcov \
+          --cov-report=xml:coverage.xml \
+          --cov-report=json:coverage.json \
+          --cov-report=term-missing \
+          --cov-branch \
+          --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
+          --junitxml=test-reports/coverage-results.xml \
+          -v --tb=short
+
+    - name: Generate coverage analysis report
+      run: |
+        python scripts/generate_coverage_report.py \
+          --project-root . \
+          --output test-reports/coverage-analysis-report.md \
+          --verbose
+
+    - name: Generate coverage badge
+      run: |
+        python scripts/generate_coverage_report.py --badge > coverage-badge.txt
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: Upload coverage artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-reports
+        path: |
+          htmlcov/
+          coverage.xml
+          coverage.json
+          test-reports/coverage-analysis-report.md
+        retention-days: 30
+
+    - name: Comment coverage on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+
+          // Read coverage badge info
+          const badgeInfo = fs.readFileSync('coverage-badge.txt', 'utf8');
+          const coverageMatch = badgeInfo.match(/Coverage: ([\d.]+)%/);
+          const coverage = coverageMatch ? coverageMatch[1] : 'Unknown';
+
+          // Read analysis report
+          let analysisReport = '';
+          try {
+            analysisReport = fs.readFileSync('test-reports/coverage-analysis-report.md', 'utf8');
+          } catch (e) {
+            analysisReport = 'Coverage analysis report not available.';
+          }
+
+          const comment = `## 📊 Coverage Report
+
+          **Coverage: ${coverage}%**
+
+          ${coverage >= 85 ? '✅' : '❌'} Coverage ${coverage >= 85 ? 'meets' : 'below'} minimum threshold (85%)
+
+          <details>
+          <summary>📋 Detailed Analysis</summary>
+
+          ${analysisReport}
+
+          </details>
+
+          📈 [View full coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+  load-testing:
+    name: Load Testing
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event.inputs.test_suite == 'all'
+    needs: coverage-analysis
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r tests/test_requirements.txt
+
+    - name: Start application for load testing
+      run: |
+        # Start the application in background
+        python -m uvicorn main:app --host 0.0.0.0 --port 8000 &
+        APP_PID=$!
+        echo "APP_PID=$APP_PID" >> $GITHUB_ENV
+
+        # Wait for application to start
+        sleep 10
+
+        # Verify application is running
+        curl -f http://localhost:8000/health || exit 1
+
+    - name: Run load tests
+      run: |
+        mkdir -p test-reports
+
+        locust \
+          -f tests/load/test_ai_orchestrator_load.py \
+          --host=http://localhost:8000 \
+          --users=20 \
+          --spawn-rate=5 \
+          --run-time=60s \
+          --headless \
+          --html=test-reports/load-test-report.html \
+          --csv=test-reports/load-test
+
+    - name: Stop application
+      if: always()
+      run: |
+        if [ ! -z "$APP_PID" ]; then
+          kill $APP_PID || true
+        fi
+
+    - name: Upload load test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: load-test-results
+        path: test-reports/load-test*
+        retention-days: 30
+
+  security-scanning:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+
+    - name: Install security scanning tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install safety bandit semgrep
+
+    - name: Run safety check
+      run: |
+        safety check --json --output safety-report.json || true
+
+    - name: Run bandit security scan
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+
+    - name: Run semgrep scan
+      run: |
+        semgrep --config=auto --json --output=semgrep-report.json . || true
+
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-scan-results
+        path: |
+          safety-report.json
+          bandit-report.json
+          semgrep-report.json
+        retention-days: 30
+
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [test-matrix, coverage-analysis]
+    if: always()
+    timeout-minutes: 5
+
+    steps:
+    - name: Download test artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts/
+
+    - name: Evaluate quality gate
+      run: |
+        echo "## Quality Gate Evaluation" >> $GITHUB_STEP_SUMMARY
+
+        # Check if all test jobs passed
+        if [ "${{ needs.test-matrix.result }}" == "success" ]; then
+          echo "✅ All test suites passed" >> $GITHUB_STEP_SUMMARY
+          TEST_STATUS="PASSED"
+        else
+          echo "❌ Some test suites failed" >> $GITHUB_STEP_SUMMARY
+          TEST_STATUS="FAILED"
+        fi
+
+        # Check coverage
+        if [ "${{ needs.coverage-analysis.result }}" == "success" ]; then
+          echo "✅ Coverage analysis passed" >> $GITHUB_STEP_SUMMARY
+          COVERAGE_STATUS="PASSED"
+        else
+          echo "❌ Coverage analysis failed" >> $GITHUB_STEP_SUMMARY
+          COVERAGE_STATUS="FAILED"
+        fi
+
+        # Overall status
+        if [ "$TEST_STATUS" == "PASSED" ] && [ "$COVERAGE_STATUS" == "PASSED" ]; then
+          echo "🎉 **Quality Gate: PASSED**" >> $GITHUB_STEP_SUMMARY
+          echo "QUALITY_GATE=PASSED" >> $GITHUB_ENV
+        else
+          echo "🚫 **Quality Gate: FAILED**" >> $GITHUB_STEP_SUMMARY
+          echo "QUALITY_GATE=FAILED" >> $GITHUB_ENV
+          exit 1
+        fi
+
+    - name: Update status check
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          github.rest.repos.createCommitStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            sha: context.sha,
+            state: process.env.QUALITY_GATE === 'PASSED' ? 'success' : 'failure',
+            target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            description: `Quality Gate: ${process.env.QUALITY_GATE}`,
+            context: 'ci/quality-gate'
+          });

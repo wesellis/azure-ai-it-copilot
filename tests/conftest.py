@@ -1,22 +1,28 @@
 """
-Pytest configuration and shared fixtures
+Pytest configuration and shared fixtures for Azure AI IT Copilot tests
+Enhanced with comprehensive test infrastructure and optimized setup
 """
 
+import asyncio
 import os
 import sys
-import asyncio
-from typing import Generator, AsyncGenerator
-from unittest.mock import Mock, AsyncMock, patch
+import tempfile
+from pathlib import Path
+from typing import AsyncGenerator, Generator
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 from faker import Faker
+from fastapi.testclient import TestClient
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Configure test environment
-os.environ["ENVIRONMENT"] = "test"
+# Set test environment before importing application modules
+os.environ["ENVIRONMENT"] = "testing"
+os.environ["DEBUG"] = "true"
+os.environ["LOG_LEVEL"] = "DEBUG"
 os.environ["AZURE_SUBSCRIPTION_ID"] = "test-subscription-id"
 os.environ["AZURE_TENANT_ID"] = "test-tenant-id"
 os.environ["AZURE_CLIENT_ID"] = "test-client-id"
@@ -26,8 +32,15 @@ os.environ["AZURE_OPENAI_KEY"] = "test-key"
 os.environ["AZURE_LOG_ANALYTICS_WORKSPACE_ID"] = "test-workspace"
 os.environ["REDIS_HOST"] = "localhost"
 os.environ["REDIS_PORT"] = "6379"
+os.environ["REDIS_DB"] = "1"  # Use different DB for tests
 
 fake = Faker()
+
+# Import after setting environment
+from api.server import app
+from core.dependency_injection import DependencyContainer
+from core.interfaces import IAgentOrchestrator, ITaskQueue
+from config.optimized_settings import get_settings
 
 
 @pytest.fixture(scope="session")

@@ -5,7 +5,7 @@ from .incident_agent import IncidentAgent
 from .cost_agent import CostOptimizationAgent
 from .compliance_agent import ComplianceAgent
 from .predictive_agent import PredictiveAgent
-# from .infrastructure_agent import InfrastructureAgent
+from .infrastructure_agent import InfrastructureAgent
 
 __all__ = [
     "ResourceAgent",
@@ -13,5 +13,5 @@ __all__ = [
     "CostOptimizationAgent",
     "ComplianceAgent",
     "PredictiveAgent",
-    # "InfrastructureAgent",
+    "InfrastructureAgent",
 ]

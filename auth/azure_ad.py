@@ -1,13 +1,18 @@
 """
-Azure AD Authentication Integration
+Optimized Azure AD Authentication Integration
 Provides enterprise-grade authentication with Azure Active Directory
+Includes caching, rate limiting, and enhanced security features
 """
 
 import logging
 import os
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Set
 from datetime import datetime, timedelta
 import json
+from functools import lru_cache, wraps
+import time
+import hashlib
+import asyncio
 
 import jwt
 from fastapi import HTTPException, status
@@ -17,15 +22,47 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
-class AzureADAuth:
-    """Azure AD Authentication and Authorization Handler"""
+# Rate limiting decorator
+def rate_limit_check(func):
+    """Decorator to check rate limiting"""
+    @wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        client_ip = kwargs.get('client_ip', 'unknown')
+        if self._is_rate_limited(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+        return await func(self, *args, **kwargs)
+    return wrapper
+
+
+# Alias for backward compatibility
+AzureADAuth = OptimizedAzureADAuth
+
+
+class OptimizedAzureADAuth:
+    """Optimized Azure AD Authentication and Authorization Handler with caching and security enhancements"""
 
     def __init__(self):
-        """Initialize Azure AD authentication"""
+        """Initialize optimized Azure AD authentication"""
         self.tenant_id = os.getenv("AZURE_TENANT_ID")
         self.client_id = os.getenv("AZURE_CLIENT_ID")
         self.client_secret = os.getenv("AZURE_CLIENT_SECRET")
         self.redirect_uri = os.getenv("AZURE_REDIRECT_URI", "http://localhost:3000/auth/callback")
+
+        # Security configurations
+        self.max_token_age = int(os.getenv("MAX_TOKEN_AGE_MINUTES", "60")) * 60  # seconds
+        self.rate_limit_window = 300  # 5 minutes
+        self.max_requests_per_window = 100
+
+        # Rate limiting tracking
+        self._request_timestamps: Dict[str, List[float]] = {}
+        self._blocked_ips: Set[str] = set()
+
+        # Token cache
+        self._token_cache: Dict[str, Dict[str, Any]] = {}
+        self._user_cache: Dict[str, Dict[str, Any]] = {}
 
         if not all([self.tenant_id, self.client_id, self.client_secret]):
             logger.warning("Azure AD credentials not configured - falling back to basic auth")
@@ -36,16 +73,73 @@ class AzureADAuth:
         self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         self.scope = ["https://graph.microsoft.com/.default"]
 
-        # Initialize MSAL app
+        # Initialize optimized MSAL app with connection pooling
         self.app = ConfidentialClientApplication(
             client_id=self.client_id,
             client_credential=self.client_secret,
             authority=self.authority,
-            token_cache=SerializableTokenCache()
+            token_cache=SerializableTokenCache(),
+            proxies=None,  # Can be configured for proxy support
+            verify=True,   # SSL verification
+            timeout=30     # Request timeout
         )
 
-    def get_authorization_url(self, state: str = None) -> str:
-        """Get Azure AD authorization URL for login flow"""
+        # HTTP client for Graph API calls
+        self.http_client = httpx.AsyncClient(
+            timeout=30.0,
+            limits=httpx.Limits(
+                max_keepalive_connections=20,
+                max_connections=100
+            )
+        )
+
+        logger.info("🔐 Optimized Azure AD authentication initialized")
+
+    def _is_rate_limited(self, client_id: str) -> bool:
+        """Check if client is rate limited"""
+        if client_id in self._blocked_ips:
+            return True
+
+        now = time.time()
+        window_start = now - self.rate_limit_window
+
+        # Clean old timestamps
+        if client_id in self._request_timestamps:
+            self._request_timestamps[client_id] = [
+                ts for ts in self._request_timestamps[client_id]
+                if ts > window_start
+            ]
+        else:
+            self._request_timestamps[client_id] = []
+
+        # Check rate limit
+        if len(self._request_timestamps[client_id]) >= self.max_requests_per_window:
+            self._blocked_ips.add(client_id)
+            logger.warning(f"Rate limit exceeded for client: {client_id}")
+            return True
+
+        # Record request
+        self._request_timestamps[client_id].append(now)
+        return False
+
+    def _generate_cache_key(self, *args) -> str:
+        """Generate cache key from arguments"""
+        content = ":".join(str(arg) for arg in args)
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    @lru_cache(maxsize=1000)
+    def _validate_token_cached(self, token: str) -> Optional[Dict[str, Any]]:
+        """Cached token validation"""
+        try:
+            # Decode token without verification for caching
+            # Full verification happens in validate_token method
+            decoded = jwt.decode(token, options={"verify_signature": False})
+            return decoded
+        except Exception:
+            return None
+
+    async def get_authorization_url(self, state: str = None, client_ip: str = "unknown") -> str:
+        """Get optimized Azure AD authorization URL for login flow with rate limiting"""
         if not self.enabled:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,

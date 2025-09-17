@@ -1,0 +1,242 @@
+# Coverage.py Configuration for Azure AI IT Copilot
+# Comprehensive coverage configuration with optimized settings
+
+[run]
+# Source code directories to analyze
+source = .
+
+# Files to include in coverage
+include =
+    ai_orchestrator/*
+    api/*
+    automation_engine/*
+    azure_integration/*
+    config/*
+    core/*
+    database/*
+    integrations/*
+    ml_models/*
+    utils/*
+    *.py
+
+# Files and directories to exclude from coverage
+omit =
+    # Test files
+    tests/*
+    test_*
+    *_test.py
+
+    # Build and distribution
+    build/*
+    dist/*
+    .eggs/*
+    *.egg-info/*
+
+    # Virtual environments
+    venv/*
+    env/*
+    .venv/*
+    .env/*
+
+    # Version control
+    .git/*
+    .hg/*
+    .svn/*
+
+    # IDE and editor files
+    .vscode/*
+    .idea/*
+    *.pyc
+    __pycache__/*
+
+    # Configuration files
+    setup.py
+    setup.cfg
+    conftest.py
+
+    # Migration files
+    */migrations/*
+    */alembic/*
+
+    # Static files
+    static/*
+    media/*
+
+    # Documentation
+    docs/*
+    *.md
+    *.rst
+
+    # Deployment files
+    Dockerfile*
+    docker-compose*
+    kubernetes/*
+    .github/*
+
+    # Cache and temporary files
+    .pytest_cache/*
+    .coverage*
+    htmlcov/*
+    .tox/*
+    .cache/*
+
+    # Specific exclusions
+    main.py
+    run.py
+    wsgi.py
+    asgi.py
+    manage.py
+
+# Branch coverage
+branch = True
+
+# Enable parallel processing
+parallel = True
+
+# Coverage data file
+data_file = .coverage
+
+# Concurrency settings for async code
+concurrency =
+    thread
+    multiprocessing
+    gevent
+
+# Context for different test types
+dynamic_context = test_function
+
+[report]
+# Reporting options
+show_missing = True
+skip_covered = False
+skip_empty = True
+
+# Precision for percentages
+precision = 2
+
+# Sort results
+sort = Cover
+
+# Output format
+format = text
+
+# Exclude lines from coverage reporting
+exclude_lines =
+    # Standard pragma
+    pragma: no cover
+
+    # Don't complain if tests don't hit defensive assertion code
+    raise AssertionError
+    raise NotImplementedError
+
+    # Don't complain if non-runnable code isn't run
+    if __name__ == .__main__.:
+    if __name__ == "__main__":
+
+    # Don't complain about missing debug-only code
+    def __repr__
+    if self\.debug
+
+    # Don't complain about abstract methods
+    @(abc\.)?abstractmethod
+
+    # Don't complain about type checking imports
+    if TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
+
+    # Don't complain about platform specific code
+    if sys.platform
+    if platform.system
+
+    # Don't complain about version specific code
+    if sys.version_info
+
+    # Don't complain about async generator cleanup
+    except GeneratorExit
+
+    # Don't complain about logging statements
+    logger\.debug
+    logger\.info
+
+    # Don't complain about pass statements
+    pass
+
+    # Don't complain about ellipsis
+    \.\.\.
+
+    # Don't complain about compatibility shims
+    except ImportError
+    try:.*except ImportError
+
+    # Don't complain about unused arguments in callbacks
+    def .*\*args, \*\*kwargs
+
+    # Don't complain about protocol implementations
+    @.*\.setter
+    @.*\.getter
+    @.*\.deleter
+
+# Partial branches to exclude
+partial_branches =
+    # Standard pragma
+    pragma: no branch
+
+    # Don't complain about version checks
+    if sys.version_info
+
+    # Don't complain about platform checks
+    if sys.platform
+    if platform.system
+
+    # Don't complain about optional imports
+    except ImportError
+    except ModuleNotFoundError
+
+[html]
+# HTML report configuration
+directory = htmlcov
+title = Azure AI IT Copilot Coverage Report
+
+# Extra CSS for better formatting
+extra_css = .coverage-extra.css
+
+# Show contexts in HTML report
+show_contexts = True
+
+# Skip files with no statements
+skip_empty = True
+
+[xml]
+# XML report configuration
+output = coverage.xml
+
+[json]
+# JSON report configuration
+output = coverage.json
+pretty_print = True
+show_contexts = True
+
+[paths]
+# Path mapping for different environments
+source =
+    .
+    /app
+    /code
+    /src
+    */site-packages
+
+# Map Windows and Unix paths
+windows =
+    c:\*
+    d:\*
+
+unix =
+    /home/*
+    /usr/*
+    /opt/*
+
+[coverage:paths]
+# Additional path mappings
+source =
+    azure-ai-it-copilot/
+    */azure-ai-it-copilot/

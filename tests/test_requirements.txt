@@ -1,0 +1,90 @@
+# Testing Requirements for Azure AI IT Copilot
+# Comprehensive testing framework dependencies
+
+# Core testing framework
+pytest==8.4.2
+pytest-asyncio==0.25.0
+pytest-xdist==3.6.1  # Parallel test execution
+pytest-cov==6.0.0    # Coverage reporting
+pytest-mock==3.14.0  # Mock utilities
+pytest-timeout==2.3.1  # Test timeout handling
+pytest-benchmark==4.0.0  # Performance benchmarking
+
+# Test data generation
+faker==32.4.0
+factory-boy==3.3.1
+hypothesis==6.119.0  # Property-based testing
+
+# API testing
+httpx==0.28.1         # Async HTTP client
+requests-mock==1.12.1
+responses==0.25.3
+
+# Load testing
+locust==2.32.4        # Load testing framework
+aiohttp==3.10.11      # Async HTTP for load tests
+
+# Database testing
+pytest-postgresql==6.1.0
+sqlalchemy-utils==0.41.2
+alembic==1.14.0
+
+# Azure SDK testing utilities
+azure-devtools==1.2.0
+azure-core-tracing-opentelemetry==1.0.0b11
+
+# Performance and monitoring
+memory-profiler==0.61.0
+psutil==6.1.0
+py-spy==0.3.14        # Python profiler
+
+# Test reporting and documentation
+pytest-html==4.1.1   # HTML test reports
+pytest-json-report==1.5.0
+allure-pytest==2.13.5  # Advanced test reporting
+
+# Mocking and patching
+responses==0.25.3
+aioresponses==0.7.6
+freezegun==1.5.1      # Time mocking
+vcrpy==6.0.2          # HTTP interaction recording
+
+# Security testing
+bandit==1.7.10        # Security linting
+safety==3.2.11        # Dependency vulnerability checking
+
+# Code quality in tests
+flake8==7.1.1
+black==24.10.0
+isort==5.13.2
+
+# Async testing utilities
+asynctest==0.13.0
+pytest-asyncio-cooperative==0.32.0
+
+# Environment and configuration testing
+python-dotenv==1.0.1
+pydantic==2.10.3
+
+# Network and service testing
+testcontainers==4.8.2  # Container-based testing
+docker==7.1.0
+
+# Snapshot testing
+syrupy==4.8.0
+
+# Property-based testing
+hypothesis==6.119.0
+
+# Test fixtures and utilities
+freezegun==1.5.1
+time-machine==2.16.0
+
+# Parallel execution
+pytest-xdist==3.6.1
+
+# Test categorization
+pytest-mark==1.0.1
+
+# Async context manager testing
+async-timeout==5.0.1

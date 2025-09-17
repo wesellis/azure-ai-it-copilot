@@ -18,42 +18,53 @@ services:
       timeout: 3s
       retries: 5
 
-  # FastAPI Backend
+  # FastAPI Backend (Optimized)
   api:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: Dockerfile.optimized
+      target: production
     container_name: ai-copilot-api
     ports:
       - "8000:8000"
     environment:
+      - ENVIRONMENT=production
       - AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}
       - AZURE_TENANT_ID=${AZURE_TENANT_ID}
       - AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
       - AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
       - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
       - AZURE_OPENAI_KEY=${AZURE_OPENAI_KEY}
-      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4-turbo}
+      - AZURE_OPENAI_MODEL=${AZURE_OPENAI_MODEL:-gpt-4}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - WORKER_PROCESSES=${WORKER_PROCESSES:-4}
+      - MAX_CONNECTIONS=${MAX_CONNECTIONS:-1000}
     volumes:
-      - ./ai-orchestrator:/app/ai-orchestrator
-      - ./api:/app/api
       - ./logs:/app/logs
+      - ./.env:/app/.env:ro
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - ai-copilot-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
 
   # React Dashboard
   dashboard:

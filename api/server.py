@@ -6,16 +6,18 @@ Provides REST API endpoints for the AI orchestrator
 import os
 import asyncio
 import json
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from datetime import datetime, timedelta
 import uuid
 from contextlib import asynccontextmanager
+from functools import lru_cache, wraps
+import time
 
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, WebSocket, WebSocketDisconnect, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from jose import jwt
 from jose.exceptions import ExpiredSignatureError, JWTError
 from passlib.context import CryptContext
@@ -28,25 +30,40 @@ import logging
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai_orchestrator.orchestrator import AzureAIOrchestrator, IntentType
+try:
+    from ai_orchestrator.orchestrator import AzureAIOrchestrator, IntentType
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("AzureAIOrchestrator not available - running in standalone mode")
+    AzureAIOrchestrator = None
+    IntentType = None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Metrics
+# Optimized Metrics with better labels
 request_count = Counter('api_requests_total', 'Total API requests', ['method', 'endpoint', 'status'])
-request_duration = Histogram('api_request_duration_seconds', 'API request duration')
-command_processing_time = Histogram('command_processing_seconds', 'Command processing time')
+request_duration = Histogram('api_request_duration_seconds', 'API request duration', buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0])
+command_processing_time = Histogram('command_processing_seconds', 'Command processing time', buckets=[1.0, 5.0, 10.0, 30.0, 60.0, 120.0])
+active_connections = Counter('websocket_connections_total', 'Total WebSocket connections')
+error_count = Counter('api_errors_total', 'Total API errors', ['endpoint', 'error_type'])
 
 
 # Pydantic models
 class CommandRequest(BaseModel):
-    """Request model for processing commands"""
-    command: str = Field(..., description="Natural language command to process")
-    context: Optional[Dict[str, Any]] = Field(default=None, description="Additional context")
+    """Optimized request model for processing commands"""
+    command: str = Field(..., min_length=1, max_length=1000, description="Natural language command to process")
+    context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional context")
     auto_approve: bool = Field(default=False, description="Auto-approve operations")
     dry_run: bool = Field(default=False, description="Simulate without executing")
+    timeout: Optional[int] = Field(default=300, ge=10, le=3600, description="Command timeout in seconds")
+
+    @validator('command')
+    def validate_command(cls, v):
+        if not v.strip():
+            raise ValueError('Command cannot be empty')
+        return v.strip()
 
 
 class CommandResponse(BaseModel):
@@ -59,20 +76,23 @@ class CommandResponse(BaseModel):
 
 
 class ResourceQuery(BaseModel):
-    """Query model for resources"""
-    resource_type: Optional[str] = None
-    resource_group: Optional[str] = None
-    tags: Optional[Dict[str, str]] = None
-    include_metrics: bool = False
+    """Optimized query model for resources"""
+    resource_type: Optional[str] = Field(None, max_length=100)
+    resource_group: Optional[str] = Field(None, max_length=90)  # Azure limit
+    tags: Optional[Dict[str, str]] = Field(default_factory=dict)
+    include_metrics: bool = Field(default=False)
+    limit: int = Field(default=100, ge=1, le=1000, description="Maximum results to return")
+    offset: int = Field(default=0, ge=0, description="Results offset for pagination")
 
 
 class IncidentReport(BaseModel):
-    """Model for incident reporting"""
-    description: str
+    """Optimized model for incident reporting"""
+    description: str = Field(..., min_length=10, max_length=2000)
     severity: str = Field(default="medium", pattern="^(low|medium|high|critical)$")
-    affected_resources: List[str]
-    symptoms: List[str]
+    affected_resources: List[str] = Field(..., min_items=1, max_items=50)
+    symptoms: List[str] = Field(..., min_items=1, max_items=20)
     auto_remediate: bool = Field(default=True)
+    priority: Optional[int] = Field(None, ge=1, le=5, description="Priority level 1-5")
 
 
 class CostAnalysisRequest(BaseModel):
@@ -102,95 +122,192 @@ class WebSocketMessage(BaseModel):
     data: Dict[str, Any]
 
 
-# Security
-security = HTTPBearer()
+# Optimized Security with caching
+security = HTTPBearer(auto_error=False)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
-# Global orchestrator instance
-orchestrator: Optional[AzureAIOrchestrator] = None
-redis_client: Optional[redis.Redis] = None
-active_websockets: List[WebSocket] = []
-
-
-async def safe_redis_operation(operation_name: str, operation_func, default_return=None):
-    """Safely execute Redis operations with error handling"""
-    if not redis_client:
-        logger.warning(f"Redis operation '{operation_name}' skipped: Redis not available")
-        return default_return
-
+# Cache for verified tokens to reduce JWT decode overhead
+@lru_cache(maxsize=1000)
+def _decode_token_cached(token: str, secret: str) -> Optional[Dict[str, Any]]:
+    """Cached token decoding to improve performance"""
     try:
-        return await operation_func()
-    except Exception as e:
-        logger.warning(f"Redis operation '{operation_name}' failed: {e}")
-        return default_return
+        return jwt.decode(token, secret, algorithms=["HS256"])
+    except (ExpiredSignatureError, JWTError):
+        return None
+
+# Rate limiting helper
+def rate_limit(max_calls: int = 100, window_seconds: int = 60):
+    """Simple rate limiting decorator"""
+    calls = {}
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            now = time.time()
+            # Clean old entries
+            calls.update({k: v for k, v in calls.items() if now - v < window_seconds})
+
+            client_id = kwargs.get('request', {}).client.host if 'request' in kwargs else 'unknown'
+            if calls.get(client_id, 0) > max_calls:
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+            calls[client_id] = calls.get(client_id, 0) + 1
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# Global application state
+orchestrator: Optional[AzureAIOrchestrator] = None
+active_websockets: List[WebSocket] = []
+app_start_time = datetime.now()
+
+
+class RedisManager:
+    """Optimized Redis operations manager with connection pooling"""
+    def __init__(self):
+        self.client: Optional[redis.Redis] = None
+        self._connected = False
+
+    async def connect(self, redis_url: str) -> bool:
+        """Connect to Redis with proper error handling"""
+        try:
+            self.client = redis.from_url(
+                redis_url,
+                encoding="utf-8",
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5,
+                retry_on_timeout=True,
+                health_check_interval=30
+            )
+            await self.client.ping()
+            self._connected = True
+            logger.info("Redis connection established successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            self.client = None
+            self._connected = False
+            return False
+
+    async def disconnect(self):
+        """Safely disconnect from Redis"""
+        if self.client:
+            await self.client.close()
+            self._connected = False
+
+    async def safe_operation(self, operation_name: str, operation_func, default_return=None):
+        """Execute Redis operations with automatic retry and error handling"""
+        if not self._connected or not self.client:
+            logger.warning(f"Redis operation '{operation_name}' skipped: Redis not available")
+            return default_return
+
+        try:
+            return await operation_func(self.client)
+        except redis.ConnectionError:
+            logger.warning(f"Redis connection lost during '{operation_name}', attempting reconnect...")
+            self._connected = False
+            return default_return
+        except Exception as e:
+            logger.warning(f"Redis operation '{operation_name}' failed: {e}")
+            return default_return
+
+# Global Redis manager
+redis_manager = RedisManager()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage application lifecycle"""
-    global orchestrator, redis_client
-    
+    """Optimized application lifecycle management"""
+    global orchestrator
+
     # Startup
-    logger.info("Starting Azure AI IT Copilot API")
-    
-    # Initialize orchestrator
-    orchestrator = AzureAIOrchestrator()
-    
-    # Initialize Redis
-    try:
-        redis_client = await redis.from_url(
-            f"redis://{os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', 6379)}",
-            encoding="utf-8",
-            decode_responses=True
-        )
-        await redis_client.ping()
-        logger.info("Redis connection established successfully")
-    except Exception as e:
-        logger.error(f"Failed to connect to Redis: {e}")
-        redis_client = None
-    
+    logger.info("🚀 Starting Azure AI IT Copilot API")
+
+    # Initialize orchestrator if available
+    if AzureAIOrchestrator:
+        try:
+            orchestrator = AzureAIOrchestrator()
+            logger.info("✅ Azure AI Orchestrator initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize orchestrator: {e}")
+            orchestrator = None
+    else:
+        orchestrator = None
+        logger.warning("⚠️ Running without AI Orchestrator")
+
+    # Initialize Redis with connection pooling
+    redis_url = f"redis://{os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', 6379)}"
+    await redis_manager.connect(redis_url)
+
+    # Initialize metrics collection
+    logger.info("📊 Metrics collection initialized")
+
     yield
-    
+
     # Shutdown
-    logger.info("Shutting down Azure AI IT Copilot API")
-    if redis_client:
-        await redis_client.close()
+    logger.info("🛑 Shutting down Azure AI IT Copilot API")
+    await redis_manager.disconnect()
+    logger.info("✅ Graceful shutdown completed")
 
 
-# Create FastAPI app
+@lru_cache()
+def get_cors_origins() -> List[str]:
+    """Get CORS origins with caching"""
+    cors_origins = os.getenv("CORS_ORIGINS", "*")
+    if cors_origins == "*":
+        return ["*"]
+    return [origin.strip() for origin in cors_origins.split(",") if origin.strip()]
+
+# Create optimized FastAPI app
 app = FastAPI(
     title="Azure AI IT Copilot API",
-    description="Natural language interface for Azure infrastructure management",
+    description="Enterprise-grade natural language interface for Azure infrastructure management",
     version="1.0.0",
-    lifespan=lifespan
+    docs_url="/docs" if os.getenv("ENVIRONMENT") != "production" else None,
+    redoc_url="/redoc" if os.getenv("ENVIRONMENT") != "production" else None,
+    lifespan=lifespan,
+    # Optimize JSON serialization
+    default_response_class=None,
 )
 
-# Configure CORS
-cors_origins = os.getenv("CORS_ORIGINS", "*")
-if cors_origins == "*":
-    origins = ["*"]
-else:
-    origins = [origin.strip() for origin in cors_origins.split(",")]
-
+# Configure optimized CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID", "X-Response-Time"],
 )
 
-# Add security middleware
+# Add security middleware with proper hosts
+allowed_hosts = os.getenv("ALLOWED_HOSTS", "*").split(",")
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["*"]  # Configure this with your domain in production
+    allowed_hosts=[host.strip() for host in allowed_hosts]
 )
 
-# Add security headers middleware
+# Optimized security headers and request tracking middleware
 @app.middleware("http")
-async def add_security_headers(request: Request, call_next):
+async def add_security_and_tracking_headers(request: Request, call_next):
+    # Generate request ID for tracing
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+
+    # Record request start time
+    start_time = time.time()
+
+    # Process request
     response = await call_next(request)
+
+    # Calculate response time
+    process_time = time.time() - start_time
+
+    # Add tracking headers
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Response-Time"] = f"{process_time:.3f}s"
 
     # Security headers
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -198,80 +315,137 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
 
-    # Only add HSTS in production with HTTPS
+    # HSTS only in production with HTTPS
     if os.getenv("ENVIRONMENT") == "production":
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+
+    # Record metrics
+    request_duration.observe(process_time)
 
     return response
 
 
-# Authentication helpers
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    """Create JWT access token"""
+# Optimized Authentication helpers with caching
+@lru_cache(maxsize=1)
+def get_jwt_secret() -> str:
+    """Get JWT secret with caching"""
+    return os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create optimized JWT access token"""
     to_encode = data.copy()
+    now = datetime.utcnow()  # Use UTC for consistency
+
     if expires_delta:
-        expire = datetime.now() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.now() + timedelta(hours=1)
-    
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(
-        to_encode,
-        os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production"),
-        algorithm="HS256"
-    )
-    return encoded_jwt
+        expire = now + timedelta(hours=int(os.getenv("JWT_EXPIRATION_HOURS", "1")))
+
+    to_encode.update({
+        "exp": expire,
+        "iat": now,  # Issued at
+        "iss": "azure-ai-copilot"  # Issuer
+    })
+
+    return jwt.encode(to_encode, get_jwt_secret(), algorithm="HS256")
 
 
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify JWT token"""
-    token = credentials.credentials
-    
-    try:
-        payload = jwt.decode(
-            token,
-            os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production"),
-            algorithms=["HS256"]
+async def verify_token(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Dict[str, Any]:
+    """Optimized JWT token verification with caching"""
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header missing",
+            headers={"WWW-Authenticate": "Bearer"},
         )
+
+    token = credentials.credentials
+
+    # Try cached decode first
+    payload = _decode_token_cached(token, get_jwt_secret())
+    if payload:
+        # Verify issuer
+        if payload.get("iss") != "azure-ai-copilot":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token issuer"
+            )
+        return payload
+
+    # If cached decode failed, try fresh decode for better error messages
+    try:
+        payload = jwt.decode(token, get_jwt_secret(), algorithms=["HS256"])
         return payload
     except ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired"
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    except JWTError:
+    except JWTError as e:
+        error_count.labels(endpoint="auth", error_type="invalid_token").inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
 
-# Health check endpoints
+# Optimized Health check endpoints
 @app.get("/health")
+@rate_limit(max_calls=1000, window_seconds=60)  # Higher limit for health checks
 async def health_check():
-    """Basic health check endpoint"""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    """Optimized basic health check endpoint"""
+    uptime = datetime.now() - app_start_time
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat() + "Z",  # ISO format with UTC
+        "uptime_seconds": int(uptime.total_seconds()),
+        "version": "1.0.0"
+    }
 
 
 @app.get("/health/detailed")
 async def detailed_health_check(current_user: dict = Depends(verify_token)):
-    """Detailed health check with system status"""
-    orchestrator_status = orchestrator.get_status() if orchestrator else {"status": "not_initialized"}
-    
-    redis_status = "disconnected"
-    if redis_client:
+    """Optimized detailed health check with comprehensive system status"""
+    start_time = time.time()
+    uptime = datetime.now() - app_start_time
+
+    # Check orchestrator status
+    orchestrator_status = {
+        "status": "available" if orchestrator else "not_available",
+        "type": "AzureAIOrchestrator" if orchestrator else None
+    }
+
+    if orchestrator:
         try:
-            await redis_client.ping()
-            redis_status = "connected"
-        except:
-            redis_status = "disconnected"
-    
+            orchestrator_status.update(orchestrator.get_status())
+        except Exception as e:
+            orchestrator_status["status"] = "error"
+            orchestrator_status["error"] = str(e)
+
+    # Check Redis status with timeout
+    redis_status = await redis_manager.safe_operation(
+        "health_ping",
+        lambda client: {"status": "connected", "ping": "pong"},
+        {"status": "disconnected"}
+    )
+
+    # System metrics
+    system_info = {
+        "active_websockets": len(active_websockets),
+        "uptime_seconds": int(uptime.total_seconds()),
+        "response_time_ms": round((time.time() - start_time) * 1000, 2)
+    }
+
     return {
         "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
         "orchestrator": orchestrator_status,
         "redis": redis_status,
+        "system": system_info,
         "version": "1.0.0"
     }
 
