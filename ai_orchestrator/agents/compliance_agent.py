@@ -8,40 +8,56 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import hashlib
 
-from azure.mgmt.security import SecurityCenter
-from azure.mgmt.policyinsights import PolicyInsightsClient
-from azure.mgmt.monitor import MonitorManagementClient
+# Optional Azure SDK imports - may not be available in all environments
+try:
+    from azure.mgmt.security import SecurityCenter
+except ImportError:
+    SecurityCenter = None
+
+try:
+    from azure.mgmt.policyinsights import PolicyInsightsClient
+except ImportError:
+    PolicyInsightsClient = None
+
+try:
+    from azure.mgmt.monitor import MonitorManagementClient
+except ImportError:
+    MonitorManagementClient = None
 from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import AzureError
 
 from langchain.tools import Tool
 import logging
 
+# Import BaseAgent from parent module
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestrator import BaseAgent
+
 logger = logging.getLogger(__name__)
 
 
-class ComplianceAgent:
+class ComplianceAgent(BaseAgent):
     """Agent for compliance checking and enforcement"""
 
     def __init__(self, orchestrator):
         """Initialize the compliance agent"""
-        self.orchestrator = orchestrator
-        self.llm = orchestrator.llm
+        super().__init__(orchestrator)
         self.credential = DefaultAzureCredential()
         self.subscription_id = orchestrator.subscription_id
 
-        # Initialize Azure clients
-        self.security_client = SecurityCenter(
-            self.credential,
-            self.subscription_id
-        )
-        self.policy_client = PolicyInsightsClient(
-            self.credential
-        )
-        self.monitor_client = MonitorManagementClient(
-            self.credential,
-            self.subscription_id
-        )
+        # Use centralized Azure clients from orchestrator (may be None if not available)
+        self.security_client = getattr(orchestrator, 'security_client', None)
+        self.policy_client = getattr(orchestrator, 'policy_client', None)
+        # Optional monitor client
+        if MonitorManagementClient:
+            self.monitor_client = MonitorManagementClient(
+                self.credential,
+                self.subscription_id
+            )
+        else:
+            self.monitor_client = None
 
         # Compliance frameworks
         self.frameworks = self._load_compliance_frameworks()

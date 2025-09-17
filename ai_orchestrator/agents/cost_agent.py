@@ -9,41 +9,49 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 
-from azure.mgmt.costmanagement import CostManagementClient
-from azure.mgmt.consumption import ConsumptionManagementClient
-from azure.mgmt.advisor import AdvisorManagementClient
+# Optional Azure SDK imports - may not be available in all environments
+try:
+    from azure.mgmt.costmanagement import CostManagementClient
+except ImportError:
+    CostManagementClient = None
+
+try:
+    from azure.mgmt.consumption import ConsumptionManagementClient
+except ImportError:
+    ConsumptionManagementClient = None
+
+try:
+    from azure.mgmt.advisor import AdvisorManagementClient
+except ImportError:
+    AdvisorManagementClient = None
 from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import AzureError
 
 from langchain.tools import Tool
 import logging
 
+# Import BaseAgent from parent module
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestrator import BaseAgent
+
 logger = logging.getLogger(__name__)
 
 
-class CostOptimizationAgent:
+class CostOptimizationAgent(BaseAgent):
     """Agent for analyzing and optimizing Azure costs"""
 
     def __init__(self, orchestrator):
         """Initialize the cost optimization agent"""
-        self.orchestrator = orchestrator
-        self.llm = orchestrator.llm
+        super().__init__(orchestrator)
         self.credential = DefaultAzureCredential()
         self.subscription_id = orchestrator.subscription_id
 
-        # Initialize Azure clients
-        self.cost_client = CostManagementClient(
-            self.credential,
-            base_url='https://management.azure.com'
-        )
-        self.consumption_client = ConsumptionManagementClient(
-            self.credential,
-            self.subscription_id
-        )
-        self.advisor_client = AdvisorManagementClient(
-            self.credential,
-            self.subscription_id
-        )
+        # Use centralized Azure clients from orchestrator (may be None if not available)
+        self.cost_client = getattr(orchestrator, 'cost_client', None)
+        self.consumption_client = getattr(orchestrator, 'consumption_client', None)
+        self.advisor_client = getattr(orchestrator, 'advisor_client', None)
 
         # Cost optimization thresholds
         self.thresholds = {

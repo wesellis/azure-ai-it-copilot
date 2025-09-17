@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import re
 
-from azure.monitor.query import LogsQueryClient, MetricsQueryClient
+from azure.monitor.query import LogsQueryClient
 from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import AzureError
 import pandas as pd
@@ -18,20 +18,26 @@ from langchain.tools import Tool
 from langchain.schema import HumanMessage, SystemMessage
 import logging
 
+# Import BaseAgent from parent module
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestrator import BaseAgent
+
 logger = logging.getLogger(__name__)
 
 
-class IncidentAgent:
+class IncidentAgent(BaseAgent):
     """Agent for diagnosing and resolving IT incidents"""
 
     def __init__(self, orchestrator):
         """Initialize the incident response agent"""
-        self.orchestrator = orchestrator
-        self.llm = orchestrator.llm
+        super().__init__(orchestrator)
 
         # Use the orchestrator's Azure Monitor clients
         self.logs_client = orchestrator.logs_client
-        self.metrics_client = orchestrator.metrics_client
+        # Note: metrics_client not available in current Azure SDK version
+        self.metrics_client = None
 
         # Knowledge base of known issues and solutions
         self.knowledge_base = self._load_knowledge_base()

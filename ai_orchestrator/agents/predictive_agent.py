@@ -8,32 +8,52 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor, IsolationForest
-from sklearn.preprocessing import StandardScaler
-import joblib
+# Optional ML imports - may not be available in all environments
+try:
+    from sklearn.ensemble import RandomForestRegressor, IsolationForest
+    from sklearn.preprocessing import StandardScaler
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    RandomForestRegressor = None
+    IsolationForest = None
+    StandardScaler = None
+    SKLEARN_AVAILABLE = False
 
-from azure.monitor.query import LogsQueryClient, MetricsQueryClient
+try:
+    import joblib
+    JOBLIB_AVAILABLE = True
+except ImportError:
+    joblib = None
+    JOBLIB_AVAILABLE = False
+
+from azure.monitor.query import LogsQueryClient
 from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import AzureError
 
 from langchain.tools import Tool
 import logging
 
+# Import BaseAgent from parent module
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestrator import BaseAgent
+
 logger = logging.getLogger(__name__)
 
 
-class PredictiveAgent:
+class PredictiveAgent(BaseAgent):
     """Agent for predictive analytics and maintenance"""
 
     def __init__(self, orchestrator):
         """Initialize the predictive agent"""
-        self.orchestrator = orchestrator
-        self.llm = orchestrator.llm
+        super().__init__(orchestrator)
         self.credential = DefaultAzureCredential()
-        
-        # Initialize Azure Monitor clients
-        self.logs_client = LogsQueryClient(self.credential)
-        self.metrics_client = MetricsQueryClient(self.credential)
+
+        # Use orchestrator's Azure Monitor clients
+        self.logs_client = orchestrator.logs_client
+        # Note: metrics_client not available in current Azure SDK version
+        self.metrics_client = None
         
         # Initialize ML models
         self.models = self._initialize_models()

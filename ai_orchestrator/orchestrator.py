@@ -24,6 +24,42 @@ from azure.mgmt.network import NetworkManagementClient
 from azure.mgmt.storage import StorageManagementClient
 from azure.monitor.query import LogsQueryClient
 
+# Optional Azure SDK imports - may not be available in all environments
+try:
+    from azure.mgmt.costmanagement import CostManagementClient
+    COST_MGMT_AVAILABLE = True
+except ImportError:
+    CostManagementClient = None
+    COST_MGMT_AVAILABLE = False
+
+try:
+    from azure.mgmt.consumption import ConsumptionManagementClient
+    CONSUMPTION_AVAILABLE = True
+except ImportError:
+    ConsumptionManagementClient = None
+    CONSUMPTION_AVAILABLE = False
+
+try:
+    from azure.mgmt.advisor import AdvisorManagementClient
+    ADVISOR_AVAILABLE = True
+except ImportError:
+    AdvisorManagementClient = None
+    ADVISOR_AVAILABLE = False
+
+try:
+    from azure.mgmt.security import SecurityCenter
+    SECURITY_AVAILABLE = True
+except ImportError:
+    SecurityCenter = None
+    SECURITY_AVAILABLE = False
+
+try:
+    from azure.mgmt.policyinsights import PolicyInsightsClient
+    POLICY_AVAILABLE = True
+except ImportError:
+    PolicyInsightsClient = None
+    POLICY_AVAILABLE = False
+
 import redis
 import logging
 
@@ -60,6 +96,7 @@ class AzureAIOrchestrator:
         credential = DefaultAzureCredential()
         self.subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
 
+        # Core infrastructure clients
         self.resource_client = ResourceManagementClient(credential, self.subscription_id)
         self.compute_client = ComputeManagementClient(credential, self.subscription_id)
         self.network_client = NetworkManagementClient(credential, self.subscription_id)
@@ -67,7 +104,38 @@ class AzureAIOrchestrator:
 
         # Azure Monitor clients for incident response
         self.logs_client = LogsQueryClient(credential)
-        self.metrics_client = MetricsQueryClient(credential)
+        # Note: MetricsQueryClient not available in current version
+
+        # Optional clients - only initialize if available
+        if COST_MGMT_AVAILABLE:
+            self.cost_client = CostManagementClient(credential, base_url='https://management.azure.com')
+        else:
+            self.cost_client = None
+            logger.warning("Azure Cost Management client not available")
+
+        if CONSUMPTION_AVAILABLE:
+            self.consumption_client = ConsumptionManagementClient(credential, self.subscription_id)
+        else:
+            self.consumption_client = None
+            logger.warning("Azure Consumption client not available")
+
+        if ADVISOR_AVAILABLE:
+            self.advisor_client = AdvisorManagementClient(credential, self.subscription_id)
+        else:
+            self.advisor_client = None
+            logger.warning("Azure Advisor client not available")
+
+        if SECURITY_AVAILABLE:
+            self.security_client = SecurityCenter(credential, self.subscription_id)
+        else:
+            self.security_client = None
+            logger.warning("Azure Security Center client not available")
+
+        if POLICY_AVAILABLE:
+            self.policy_client = PolicyInsightsClient(credential)
+        else:
+            self.policy_client = None
+            logger.warning("Azure Policy Insights client not available")
 
     def setup_ai_model(self):
         """Initialize Azure OpenAI model"""
@@ -407,14 +475,45 @@ class BaseAgent:
     async def create_plan(
         self,
         command: str,
-        context: Optional[Dict[str, Any]]
+        context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Create execution plan from command"""
-        raise NotImplementedError
+        """Create execution plan from command
+
+        Args:
+            command: Natural language command to process
+            context: Optional context information
+
+        Returns:
+            Dictionary containing execution plan
+        """
+        # Default implementation for agents that don't override
+        return {
+            "operation": "unknown",
+            "command": command,
+            "context": context or {},
+            "steps": [],
+            "requires_approval": False,
+            "estimated_time": "unknown",
+            "agent_type": self.__class__.__name__
+        }
 
     async def execute(self, plan: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the plan"""
-        raise NotImplementedError
+        """Execute the plan
+
+        Args:
+            plan: Execution plan to execute
+
+        Returns:
+            Dictionary containing execution results
+        """
+        # Default implementation for agents that don't override
+        return {
+            "status": "not_implemented",
+            "message": f"Agent {self.__class__.__name__} has not implemented execution logic",
+            "plan": plan,
+            "start_time": datetime.now().isoformat(),
+            "end_time": datetime.now().isoformat()
+        }
 
 
 # Example usage

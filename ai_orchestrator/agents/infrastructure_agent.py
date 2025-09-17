@@ -19,16 +19,21 @@ from langchain.tools import Tool
 from langchain.schema import HumanMessage, SystemMessage
 import logging
 
+# Import BaseAgent from parent module
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from orchestrator import BaseAgent
+
 logger = logging.getLogger(__name__)
 
 
-class InfrastructureAgent:
+class InfrastructureAgent(BaseAgent):
     """Agent for managing Azure infrastructure resources"""
 
     def __init__(self, orchestrator):
         """Initialize the infrastructure agent"""
-        self.orchestrator = orchestrator
-        self.llm = orchestrator.llm
+        super().__init__(orchestrator)
         self.subscription_id = orchestrator.subscription_id
 
         # Use the orchestrator's Azure clients to avoid duplication
@@ -348,8 +353,16 @@ class InfrastructureAgent:
             },
             'os_profile': {
                 'computer_name': vm_name,
-                'admin_username': 'azureuser',
-                'admin_password': 'P@ssw0rd123!'  # In production, use Key Vault
+                'admin_username': specs.get('admin_username', 'azureuser'),
+                'disable_password_authentication': True,  # Use SSH keys for security
+                'linux_configuration': {
+                    'ssh': {
+                        'public_keys': [{
+                            'path': f"/home/{specs.get('admin_username', 'azureuser')}/.ssh/authorized_keys",
+                            'key_data': specs.get('ssh_public_key', 'REQUIRED_SSH_KEY_PLACEHOLDER')
+                        }]
+                    }
+                }
             },
             'network_profile': {
                 'network_interfaces': [{
